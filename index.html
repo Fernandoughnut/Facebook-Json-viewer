@@ -113,37 +113,6 @@
         </div>
     </div>
 
-    <!-- Trust & privacy dialog: appears on first load unless user disables it -->
-    <div id="trustModal" class="trust-modal" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="trustTitle">
-        <div class="trust-backdrop" tabindex="-1"></div>
-        <div class="trust-card" role="document">
-            <header class="trust-header">
-                <h2 id="trustTitle">This tool runs locally — your data stays with you</h2>
-            </header>
-            <div class="trust-body">
-                <p>
-                    This is an open-source viewer published on GitHub and can be hosted as a GitHub Page. Files you
-                    select (message JSON or media folders) are processed entirely in your browser — nothing is uploaded
-                    or sent to any server by this application. The tool does not collect or transmit your messages,
-                    media, or metadata under any circumstance.
-                </p>
-                <p>
-                    If you'd prefer extra caution, you can download the repository and run the page offline (open the
-                    HTML file locally) or host it yourself. For full transparency the source code is available on
-                    GitHub.
-                </p>
-                <label class="trust-row"><input type="checkbox" id="dontShowAgain"> Don't show this again</label>
-            </div>
-            <footer class="trust-footer">
-                <a id="trustGitHub" class="btn-link" href="https://github.com/DuckCIT/Facebook-Messenger-JSON-Viewer" target="_blank" rel="noopener">View source on GitHub</a>
-                <div class="trust-actions">
-                    <button id="trustClose" class="btn btn-primary">Continue</button>
-                    <button id="trustCloseAlt" class="btn btn-secondary">Close</button>
-                </div>
-            </footer>
-        </div>
-    </div>
-
     <div id="pdfModal" class="pdf-modal" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="pdfTitle">
         <div class="pdf-backdrop" tabindex="-1"></div>
         <div class="pdf-card" role="document">
