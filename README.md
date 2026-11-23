@@ -99,7 +99,7 @@ flutter run -d linux
 
 1. Android build: folder access, video and audio playback, testing on an Android 17 (AOSP) phone and an Android 14 tablet.
 2. Local SQLite database: remember conversations and folders, fast search, quick re-opening of large exports.
-3. Settings: theme and other options.
+3. Settings: theme and other options...
 4. Export of the current view to text or CSV, and search across all conversations.
 
 ## Privacy
