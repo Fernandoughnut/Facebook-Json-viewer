@@ -5,6 +5,7 @@ A viewer and organizer for exported Facebook / Messenger messages.
 Message exports, especially from end-to-end encrypted chats, arrive as JSON files that are unreadable as they are. Messages Viewer turns them into normal chat threads you can scroll, search, filter and export, with your photos shown inline. Everything runs on your own device. Nothing is uploaded anywhere.
 
 Built with Flutter. Linux works today; Android builds should work with the file-picker fallbacks described below, but have not been tested on a device.
+Should work easily on android
 
 ## Features
 
