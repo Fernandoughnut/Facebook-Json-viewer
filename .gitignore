@@ -1,0 +1,13 @@
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+build/
+*.tar.gz
+linux/flutter/ephemeral/
+**/ephemeral/
+android/local.properties
+.idea/
+.vscode/
+*.log
