@@ -1,5 +1,7 @@
 // Parser regression tests, using a real modern Messenger export as the fixture.
 
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fb_viewer/models.dart';
 import 'package:fb_viewer/parser.dart';
@@ -61,6 +63,7 @@ void main() {
   test('reply variants are recognised', () {
     expect(parseReply({'reply_to': 'abc'})!.id, 'abc');
     expect(parseReply({'replyToMessageId': 'xyz'})!.id, 'xyz');
+    expect(parseReply({'reply': true, 'reply_to': 'abc'})!.id, 'abc');
     final nested = parseReply({
       'quoted_message': {
         'message_id': 'q1',
@@ -79,4 +82,21 @@ void main() {
     expect(Media('photos', r'C:\export\media\abc.jpg').name, 'abc.jpg');
     expect(Media('photos', './media/abc.jpg').name, 'abc.jpg');
   });
+
+  test(
+    'scanDir resolves case-only filename collisions deterministically',
+    () async {
+      final dir = await Directory.systemTemp.createTemp(
+        'fb_viewer_scan_dir_test_',
+      );
+      addTearDown(() {
+        if (dir.existsSync()) dir.deleteSync(recursive: true);
+      });
+      File('${dir.path}/a.jpg').writeAsStringSync('lower');
+      File('${dir.path}/A.jpg').writeAsStringSync('upper');
+
+      final scanned = scanDir(dir.path);
+      expect(scanned['a.jpg'], endsWith('A.jpg'));
+    },
+  );
 }

@@ -21,4 +21,57 @@ void main() {
       'Ana and ana',
     );
   });
+
+  test('highlightSpans can match exactly when case sensitivity is enabled', () {
+    final spans = highlightSpans(
+      'Ana ana',
+      'Ana',
+      null,
+      kHighlightColor,
+      caseSensitive: true,
+    );
+    expect(spans.length, 2);
+    expect((spans.first as TextSpan).text, 'Ana');
+    expect(spans.last as TextSpan, isA<TextSpan>());
+    expect((spans.last as TextSpan).text, ' ana');
+  });
+
+  test('snippet stays readable around a match in a long Unicode string', () {
+    final text = 'İ😆${'a' * 200}needle${'b' * 200}';
+    final got = snippet(text, 'needle');
+    expect(got, contains('needle'));
+    expect(got.length, lessThan(text.length));
+    expect(got.startsWith('…'), isTrue);
+    expect(got.endsWith('…'), isTrue);
+  });
+
+  test('snippet honours case-sensitive searching', () {
+    final text = '${'a' * 100}Needle need${'b' * 100}';
+    final got = snippet(text, 'Needle', caseSensitive: true);
+    expect(got, contains('Needle'));
+    expect(got.length, lessThan(text.length));
+  });
+
+  test('nextMatchPosition wraps in both directions', () {
+    const matches = [3, 7, 9];
+    expect(nextMatchPosition(null, matches, 1), 0);
+    expect(nextMatchPosition(null, matches, -1), 2);
+    expect(nextMatchPosition(7, matches, 1), 2);
+    expect(nextMatchPosition(9, matches, 1), 0);
+    expect(nextMatchPosition(3, matches, -1), 2);
+    expect(nextMatchPosition(0, const <int>[], 1), -1);
+  });
+
+  test('firstIndexAtOrAfter finds the first message on a picked date', () {
+    final times = [_At(1000), _At(2000), _At(2000), _At(3000)];
+    expect(firstIndexAtOrAfter(times, 2000, (x) => x.t), 1);
+    expect(firstIndexAtOrAfter(times, 1500, (x) => x.t), 1);
+    expect(firstIndexAtOrAfter(times, 4000, (x) => x.t), 4);
+    expect(firstIndexAtOrAfter(const <_At>[], 0, (x) => x.t), 0);
+  });
+}
+
+class _At {
+  final int t;
+  const _At(this.t);
 }

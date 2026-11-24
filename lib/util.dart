@@ -12,6 +12,31 @@ import 'store.dart';
 
 String two(int n) => n.toString().padLeft(2, '0');
 
+/// Position in [matches] of the next/previous match after [current].
+/// Returns -1 when there are no matches; wraps at both ends.
+int nextMatchPosition(int? current, List<int> matches, int delta) {
+  if (matches.isEmpty) return -1;
+  var pos = current == null ? (delta > 0 ? -1 : 0) : matches.indexOf(current);
+  if (pos < 0) pos = delta > 0 ? -1 : 0;
+  return (pos + delta + matches.length) % matches.length;
+}
+
+/// First index in [items] whose timestamp is at or after [target].
+/// Items are expected to be sorted by time; no allocation is needed.
+int firstIndexAtOrAfter<T>(List<T> items, int target, int Function(T) timeOf) {
+  var lo = 0;
+  var hi = items.length;
+  while (lo < hi) {
+    final mid = (lo + hi) >> 1;
+    if (timeOf(items[mid]) < target) {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+  return lo;
+}
+
 /// One place to tune search highlights (and their readable foreground).
 const Color kHighlightColor = Color(0xFFFFC107); // Amber 500
 const Color kHighlightOnColor = Colors.black;
@@ -162,14 +187,15 @@ List<InlineSpan> highlightSpans(
   String text,
   String q,
   TextStyle? base,
-  Color hl,
-) {
+  Color hl, {
+  bool caseSensitive = false,
+}) {
   if (q.isEmpty) return [TextSpan(text: text, style: base)];
-  final lt = text.toLowerCase();
-  final lq = q.toLowerCase();
+  final lt = caseSensitive ? text : text.toLowerCase();
+  final lq = caseSensitive ? q : q.toLowerCase();
   // Odd Unicode can change the length when lowercased; slicing by the original
   // query length would then cut the wrong characters.
-  if (lt.length != text.length || lq.length != q.length) {
+  if (!caseSensitive && (lt.length != text.length || lq.length != q.length)) {
     return [TextSpan(text: text, style: base)];
   }
   final out = <InlineSpan>[];
@@ -196,8 +222,15 @@ List<InlineSpan> highlightSpans(
 }
 
 /// A short piece of [text] around the first match, for the results list.
-String snippet(String text, String q) {
-  final i = text.toLowerCase().indexOf(q.toLowerCase());
+String snippet(String text, String q, {bool caseSensitive = false}) {
+  final lower = caseSensitive ? text : text.toLowerCase();
+  final lq = caseSensitive ? q : q.toLowerCase();
+  // Offsets from a lowered string cannot be used to slice the original text.
+  if (!caseSensitive &&
+      (lower.length != text.length || lq.length != q.length)) {
+    return text;
+  }
+  final i = lower.indexOf(lq);
   if (i < 0 || text.length <= 140) return text;
   final start = math.max(0, i - 40);
   final end = math.min(text.length, i + q.length + 90);

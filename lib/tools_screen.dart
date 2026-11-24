@@ -133,6 +133,137 @@ class BookmarksTab extends StatelessWidget {
   }
 }
 
+class _InsightsData {
+  final int msgCount;
+  final int chatCount;
+  final int reactions;
+  final int media;
+  final int links;
+  final int replies;
+  final int bookmarks;
+  final int maxSender;
+  final int maxYear;
+  final int medianResponse;
+  final int responseCount;
+  final List<MapEntry<String, int>> topSenders;
+  final List<MapEntry<int, int>> years;
+  final List<MapEntry<String, int>> months;
+  final List<MapEntry<String, int>> topEmojis;
+  final List<({int ms, String chat, int? t})> gaps;
+  final Map<String, Map<String, int>> wordsBySender;
+
+  const _InsightsData({
+    required this.msgCount,
+    required this.chatCount,
+    required this.reactions,
+    required this.media,
+    required this.links,
+    required this.replies,
+    required this.bookmarks,
+    required this.maxSender,
+    required this.maxYear,
+    required this.medianResponse,
+    required this.responseCount,
+    required this.topSenders,
+    required this.years,
+    required this.months,
+    required this.topEmojis,
+    required this.gaps,
+    required this.wordsBySender,
+  });
+}
+
+/// Pure, relatively expensive pass over every message. Called only when the
+/// loaded messages or display names change, not on every status notification.
+_InsightsData _analyzeInsights(Store store) {
+  final msgs = <Msg>[
+    for (final c in store.chats.values)
+      for (final m in c.messages) m,
+  ];
+  final bySender = <String, int>{};
+  final byYear = <int, int>{};
+  final byMonth = <String, int>{};
+  final emojis = <String, int>{};
+  var reactions = 0, media = 0, links = 0, replies = 0;
+  for (final m in msgs) {
+    final name = displayName(m.sender);
+    bySender[name] = (bySender[name] ?? 0) + 1;
+    if (m.t != null) {
+      final d = DateTime.fromMillisecondsSinceEpoch(m.t!);
+      byYear[d.year] = (byYear[d.year] ?? 0) + 1;
+      final month = '${d.year}-${two(d.month)}';
+      byMonth[month] = (byMonth[month] ?? 0) + 1;
+    }
+    media += m.media.length;
+    if (m.share.isNotEmpty) links++;
+    if (m.reply != null) replies++;
+    for (final r in m.reactions) {
+      reactions++;
+      emojis[r.emoji] = (emojis[r.emoji] ?? 0) + 1;
+    }
+  }
+
+  final responses = <int>[];
+  final gaps = <({int ms, String chat, int? t})>[];
+  final wordsBySender = <String, Map<String, int>>{};
+  final wordRe = RegExp(r"[a-z']{3,}", caseSensitive: false);
+  for (final c in store.chats.values) {
+    var longest = (ms: 0, chat: c.title, t: null as int?);
+    for (var i = 1; i < c.messages.length; i++) {
+      final a = c.messages[i - 1];
+      final b = c.messages[i];
+      if (a.t == null || b.t == null) continue;
+      final gap = (b.t! - a.t!).abs();
+      if (gap > longest.ms) longest = (ms: gap, chat: c.title, t: b.t);
+      if (a.sender != b.sender) responses.add(gap);
+    }
+    if (longest.ms > 0) gaps.add(longest);
+    for (final m in c.messages) {
+      final name = displayName(m.sender);
+      final counts = wordsBySender.putIfAbsent(name, () => <String, int>{});
+      for (final match in wordRe.allMatches(m.text.toLowerCase())) {
+        final w = match.group(0)!;
+        counts[w] = (counts[w] ?? 0) + 1;
+      }
+    }
+  }
+  gaps.sort((a, b) => b.ms.compareTo(a.ms));
+  responses.sort();
+
+  final topSenders = bySender.entries.toList()
+    ..sort((a, b) => b.value.compareTo(a.value));
+  final topEmojis = emojis.entries.toList()
+    ..sort((a, b) => b.value.compareTo(a.value));
+  final years = byYear.entries.toList()..sort((a, b) => a.key.compareTo(b.key));
+  final months = byMonth.entries.toList()
+    ..sort((a, b) => a.key.compareTo(b.key));
+
+  return _InsightsData(
+    msgCount: msgs.length,
+    chatCount: store.chats.length,
+    reactions: reactions,
+    media: media,
+    links: links,
+    replies: replies,
+    bookmarks: store.bookmarked().length,
+    maxSender: topSenders.isEmpty ? 1 : topSenders.first.value,
+    maxYear: years.isEmpty
+        ? 1
+        : years.map((e) => e.value).reduce((a, b) => a > b ? a : b),
+    medianResponse: responses.isEmpty ? 0 : responses[responses.length ~/ 2],
+    responseCount: responses.length,
+    topSenders: topSenders,
+    years: years,
+    months: months,
+    topEmojis: topEmojis,
+    gaps: gaps,
+    wordsBySender: wordsBySender,
+  );
+}
+
+_InsightsData? _insightsCache;
+String _insightsSig = '';
+
 class InsightsTab extends StatelessWidget {
   final Store store;
   const InsightsTab({super.key, required this.store});
@@ -142,82 +273,33 @@ class InsightsTab extends StatelessWidget {
     return ListenableBuilder(
       listenable: store,
       builder: (context, _) {
-        final msgs = <Msg>[
-          for (final c in store.chats.values)
-            for (final m in c.messages) m,
-        ];
-        if (msgs.isEmpty) {
+        final sig =
+            '${identityHashCode(store)}|${store.dataRevision}|${gSettings?.revision ?? 0}';
+        final data = sig == _insightsSig && _insightsCache != null
+            ? _insightsCache!
+            : _analyzeInsights(store);
+        if (sig != _insightsSig) {
+          _insightsSig = sig;
+          _insightsCache = data;
+        }
+        if (data.msgCount == 0) {
           return const Center(child: Text('Open a JSON file to see insights.'));
         }
 
-        final bySender = <String, int>{};
-        final byYear = <int, int>{};
-        final byMonth = <String, int>{};
-        final emojis = <String, int>{};
-        var reactions = 0, media = 0, links = 0, replies = 0;
-        for (final m in msgs) {
-          final name = displayName(m.sender);
-          bySender[name] = (bySender[name] ?? 0) + 1;
-          if (m.t != null) {
-            final d = DateTime.fromMillisecondsSinceEpoch(m.t!);
-            byYear[d.year] = (byYear[d.year] ?? 0) + 1;
-            final month = '${d.year}-${two(d.month)}';
-            byMonth[month] = (byMonth[month] ?? 0) + 1;
-          }
-          media += m.media.length;
-          if (m.share.isNotEmpty) links++;
-          if (m.reply != null) replies++;
-          for (final r in m.reactions) {
-            reactions++;
-            emojis[r.emoji] = (emojis[r.emoji] ?? 0) + 1;
-          }
-        }
-        // Conversation-level analysis: response times, quiet gaps and vocabulary.
-        final responses = <int>[];
-        final gaps = <({int ms, String chat, int? t})>[];
-        final wordsBySender = <String, Map<String, int>>{};
-        final wordRe = RegExp(r"[a-z']{3,}", caseSensitive: false);
-        for (final c in store.chats.values) {
-          var longest = (ms: 0, chat: c.title, t: null as int?);
-          for (var i = 1; i < c.messages.length; i++) {
-            final a = c.messages[i - 1];
-            final b = c.messages[i];
-            if (a.t == null || b.t == null) continue;
-            final gap = (b.t! - a.t!).abs();
-            if (gap > longest.ms) longest = (ms: gap, chat: c.title, t: b.t);
-            if (a.sender != b.sender) responses.add(gap);
-          }
-          if (longest.ms > 0) gaps.add(longest);
-          for (final m in c.messages) {
-            final name = displayName(m.sender);
-            final counts = wordsBySender.putIfAbsent(
-              name,
-              () => <String, int>{},
-            );
-            for (final match in wordRe.allMatches(m.text.toLowerCase())) {
-              final w = match.group(0)!;
-              counts[w] = (counts[w] ?? 0) + 1;
-            }
-          }
-        }
-        gaps.sort((a, b) => b.ms.compareTo(a.ms));
-        responses.sort();
-        final medianResponse = responses.isEmpty
-            ? 0
-            : responses[responses.length ~/ 2];
-
-        final topSenders = bySender.entries.toList()
-          ..sort((a, b) => b.value.compareTo(a.value));
-        final topEmojis = emojis.entries.toList()
-          ..sort((a, b) => b.value.compareTo(a.value));
-        final years = byYear.entries.toList()
-          ..sort((a, b) => a.key.compareTo(b.key));
-        final months = byMonth.entries.toList()
-          ..sort((a, b) => a.key.compareTo(b.key));
-        final maxSender = topSenders.isEmpty ? 1 : topSenders.first.value;
-        final maxYear = years.isEmpty
-            ? 1
-            : years.map((e) => e.value).reduce((a, b) => a > b ? a : b);
+        final reactions = data.reactions;
+        final media = data.media;
+        final links = data.links;
+        final replies = data.replies;
+        final medianResponse = data.medianResponse;
+        final responseCount = data.responseCount;
+        final gaps = data.gaps;
+        final wordsBySender = data.wordsBySender;
+        final topSenders = data.topSenders;
+        final years = data.years;
+        final months = data.months;
+        final topEmojis = data.topEmojis;
+        final maxSender = data.maxSender;
+        final maxYear = data.maxYear;
 
         return ListView(
           padding: const EdgeInsets.all(12),
@@ -229,13 +311,13 @@ class InsightsTab extends StatelessWidget {
                   spacing: 24,
                   runSpacing: 8,
                   children: [
-                    Text('${msgs.length} messages'),
-                    Text('${store.chats.length} conversations'),
+                    Text('${data.msgCount} messages'),
+                    Text('${data.chatCount} conversations'),
                     Text('$reactions reactions'),
                     Text('$media media files'),
                     Text('$links links'),
                     Text('$replies replies'),
-                    Text('${store.bookmarked().length} bookmarks'),
+                    Text('${data.bookmarks} bookmarks'),
                   ],
                 ),
               ),
@@ -274,9 +356,9 @@ class InsightsTab extends StatelessWidget {
               dense: true,
               title: const Text('Typical reply time'),
               subtitle: Text(
-                responses.isEmpty
+                responseCount == 0
                     ? 'Not enough data'
-                    : '${Duration(milliseconds: medianResponse).inMinutes} min (median of ${responses.length} turns)',
+                    : '${Duration(milliseconds: medianResponse).inMinutes} min (median of $responseCount turns)',
               ),
             ),
             for (final g in gaps.take(5))
@@ -522,7 +604,7 @@ class MediaTab extends StatelessWidget {
                   onPressed: () async {
                     final b = StringBuffer('conversation,file\n');
                     for (final x in stats) {
-                      for (final name in x.s.missingSample) {
+                      for (final name in store.missingMediaNames(x.chat)) {
                         final row = [
                           x.chat.title,
                           name,

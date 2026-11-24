@@ -336,6 +336,9 @@ class Bubble extends StatelessWidget {
   final Store store;
   final Chat chat;
   final String query;
+  final bool regex;
+  final bool caseSensitive;
+  final RegExp? compiledRegex;
   final bool highlighted;
   final void Function(String path) onPic;
   final void Function(Msg target) onOpenReply;
@@ -356,6 +359,9 @@ class Bubble extends StatelessWidget {
     required this.chat,
     required this.query,
     required this.highlighted,
+    this.regex = false,
+    this.caseSensitive = false,
+    this.compiledRegex,
     required this.onPic,
     required this.onOpenReply,
     this.bookmarked = false,
@@ -446,10 +452,21 @@ class Bubble extends StatelessWidget {
   List<Widget> body(BuildContext context, TextStyle base, Color fg) {
     final out = <Widget>[];
     if (m.text.isNotEmpty) {
+      // Regex matches can come from the sender or a file name, so highlight
+      // only the exact substring that actually matched the message text.
+      final hq = regex
+          ? (compiledRegex?.firstMatch(m.text)?.group(0) ?? '')
+          : query;
       out.add(
         SelectableText.rich(
           TextSpan(
-            children: highlightSpans(m.text, query, base, kHighlightColor),
+            children: highlightSpans(
+              m.text,
+              hq,
+              base,
+              kHighlightColor,
+              caseSensitive: regex || caseSensitive,
+            ),
           ),
         ),
       );

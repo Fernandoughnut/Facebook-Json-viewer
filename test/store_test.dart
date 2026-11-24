@@ -71,6 +71,52 @@ void main() {
     expect(after.fromShared, 1);
     expect(identical(after, before), isFalse);
   });
+
+  test('missing media export is not truncated by the dialog sample', () async {
+    final dir = await Directory.systemTemp.createTemp('fb_viewer_store_test_');
+    addTearDown(() {
+      if (dir.existsSync()) dir.deleteSync(recursive: true);
+    });
+    final settings = AppSettings(configDir: dir.path);
+    addTearDown(settings.dispose);
+    await settings.load();
+    final store = Store(settings);
+
+    final chat = Chat('chat-c', 'Chat C');
+    for (var i = 0; i < 35; i++) {
+      chat.messages.add(
+        _msg('m$i', 'Ana', i + 1, media: [Media('photos', 'photos/$i.jpg')]),
+      );
+    }
+    store.chats[chat.key] = chat;
+
+    expect(store.statsFor(chat).missingSample, hasLength(30));
+    expect(store.missingMediaNames(chat), hasLength(35));
+  });
+
+  test('removing every chat from a file stops restoring that file', () async {
+    final dir = await Directory.systemTemp.createTemp('fb_viewer_store_test_');
+    addTearDown(() {
+      if (dir.existsSync()) dir.deleteSync(recursive: true);
+    });
+    final settings = AppSettings(configDir: dir.path);
+    addTearDown(settings.dispose);
+    await settings.load();
+    final store = Store(settings);
+
+    final json = File('${dir.path}/messages.json')
+      ..writeAsStringSync(
+        File('test/fixtures/test_message.json').readAsStringSync(),
+      );
+    await store.addJsonFiles([json.path], remember: true);
+    expect(store.chats, isNotEmpty);
+    expect(settings.jsonPaths, contains(json.path));
+
+    for (final chat in store.chats.values.toList()) {
+      store.removeChat(chat);
+    }
+    expect(settings.jsonPaths, isNot(contains(json.path)));
+  });
 }
 
 Msg _msg(

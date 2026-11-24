@@ -84,6 +84,13 @@ class Store extends ChangeNotifier {
   /// Bumped whenever any media folder is added or removed, so views know to refresh photos.
   int mediaVersion = 0;
 
+  /// Bumped when loaded messages change, so expensive derived views can cache.
+  int dataRevision = 0;
+
+  /// Which JSON paths contributed each chat key. Lets us drop a remembered
+  /// file once every conversation it contained has been removed from the app.
+  final Map<String, Set<String>> _pathsForChat = {};
+
   /// Original message -> the messages that reply to it (for "Show replies").
   final Map<Msg, List<Msg>> _replyIndex = {};
 
@@ -208,6 +215,19 @@ class Store extends ChangeNotifier {
     return stats;
   }
 
+  /// Full list of missing media names for export. [MediaStats.missingSample]
+  /// is intentionally capped for dialogs; CSV exports must not be truncated.
+  List<String> missingMediaNames(Chat chat) {
+    final out = <String>[];
+    for (final m in chat.messages) {
+      for (final x in m.media) {
+        if (x.uri.isEmpty) continue;
+        if (_find(x.uri, chat) == null) out.add(x.name);
+      }
+    }
+    return out;
+  }
+
   // ---- replies ----
 
   /// Link every reply to the message it answers (by message ID, or by time + sender).
@@ -274,6 +294,7 @@ class Store extends ChangeNotifier {
       list.add(k);
     }
     if (list.isEmpty) settings.bookmarks.remove(c.key);
+    dataRevision++;
     settings.save();
     notifyListeners();
   }
@@ -289,6 +310,7 @@ class Store extends ChangeNotifier {
     } else {
       settings.notes[k] = v;
     }
+    dataRevision++;
     settings.save();
     notifyListeners();
   }
@@ -344,11 +366,14 @@ class Store extends ChangeNotifier {
             problems.add('$name: no messages found');
             continue;
           }
+          final activeKeys = <String>{};
           for (final t in threads) {
             if (settings.removedChats.contains(t.key)) {
               skippedRemoved++;
               continue;
             }
+            activeKeys.add(t.key);
+            _pathsForChat.putIfAbsent(t.key, () => <String>{}).add(path);
             final c = chats.putIfAbsent(t.key, () => Chat(t.key, t.title));
             c.participants.addAll(t.participants);
             for (final m in t.messages) {
@@ -362,9 +387,15 @@ class Store extends ChangeNotifier {
               added++;
             }
           }
-          _loadedPaths.add(path);
-          if (remember && !settings.jsonPaths.contains(path)) {
-            settings.jsonPaths.add(path);
+          // A file whose only conversations were removed must not be reopened
+          // on every startup, nor block re-adding it later in this session.
+          if (activeKeys.isNotEmpty) {
+            _loadedPaths.add(path);
+            if (remember && !settings.jsonPaths.contains(path)) {
+              settings.jsonPaths.add(path);
+            }
+          } else if (remember) {
+            settings.jsonPaths.remove(path);
           }
         } catch (e) {
           problems.add('$name: $e');
@@ -378,6 +409,7 @@ class Store extends ChangeNotifier {
     }
     _mediaStats.clear();
     final replies = rebuildReplyIndex();
+    dataRevision++;
     if (remember) settings.save();
     status =
         'Loaded $added messages.'
@@ -462,6 +494,14 @@ class Store extends ChangeNotifier {
     chats.remove(c.key);
     _mediaStats.clear();
     rebuildReplyIndex();
+    dataRevision++;
+    final paths = _pathsForChat.remove(c.key) ?? const <String>{};
+    for (final path in paths) {
+      if (!_pathsForChat.values.any((owned) => owned.contains(path))) {
+        settings.jsonPaths.remove(path);
+        _loadedPaths.remove(path);
+      }
+    }
     settings.chatPos.remove(c.key);
     settings.bookmarks.remove(c.key);
     settings.chatDirs.remove(c.key);
@@ -524,9 +564,11 @@ class Store extends ChangeNotifier {
     chats.clear();
     _replyIndex.clear();
     _mediaStats.clear();
+    _pathsForChat.clear();
     _loadedPaths.clear();
     sharedDirs.clear();
     mediaVersion++;
+    dataRevision++;
     forgetSession();
     status = 'Cleared.';
     notifyListeners();

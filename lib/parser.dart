@@ -196,7 +196,11 @@ Reply? parseReply(Map m) {
   final rid = pick(m, replyIdKeys);
   final rv = pick(m, replyKeys);
   if (rv == null && rid == null) return null;
-  if (rv is bool || rv is List) return null;
+  if (rv is bool || rv is List) {
+    // Some exports mark the reply with a flag/list but keep the ID elsewhere.
+    if (rid != null) return Reply(id: '$rid');
+    return null;
+  }
   if (rv is Map) {
     final tv = pick(rv, textKeys);
     return Reply(
@@ -504,7 +508,11 @@ Map<String, String> scanDir(String dir) {
     ).listSync(recursive: true, followLinks: false)) {
       if (e is File) {
         final n = e.path.split(pathSep).last.toLowerCase();
-        if (!n.endsWith('.json')) out[n] = e.path;
+        if (!n.endsWith('.json')) {
+          // Case-only collisions must not depend on directory iteration order.
+          final prev = out[n];
+          if (prev == null || e.path.compareTo(prev) < 0) out[n] = e.path;
+        }
       }
     }
   } catch (_) {

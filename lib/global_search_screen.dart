@@ -107,25 +107,46 @@ class _GlobalSearchScreenState extends State<GlobalSearchScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
             child: Row(
               children: [
-                DropdownButton<String?>(
-                  value: sender,
-                  hint: const Text('Everyone'),
-                  items: [
-                    const DropdownMenuItem<String?>(
-                      value: null,
-                      child: Text('Everyone'),
-                    ),
-                    for (final n in names)
-                      DropdownMenuItem<String?>(
-                        value: n,
-                        child: Text(displayName(n)),
+                if (theme.useMaterial3)
+                  DropdownMenu<String?>(
+                    initialSelection: sender,
+                    hintText: 'Everyone',
+                    dropdownMenuEntries: [
+                      const DropdownMenuEntry<String?>(
+                        value: null,
+                        label: 'Everyone',
                       ),
-                  ],
-                  onChanged: (v) => setState(() {
-                    sender = v;
-                    _search();
-                  }),
-                ),
+                      for (final n in names)
+                        DropdownMenuEntry<String?>(
+                          value: n,
+                          label: displayName(n),
+                        ),
+                    ],
+                    onSelected: (v) => setState(() {
+                      sender = v;
+                      _search();
+                    }),
+                  )
+                else
+                  DropdownButton<String?>(
+                    value: sender,
+                    hint: const Text('Everyone'),
+                    items: [
+                      const DropdownMenuItem<String?>(
+                        value: null,
+                        child: Text('Everyone'),
+                      ),
+                      for (final n in names)
+                        DropdownMenuItem<String?>(
+                          value: n,
+                          child: Text(displayName(n)),
+                        ),
+                    ],
+                    onChanged: (v) => setState(() {
+                      sender = v;
+                      _search();
+                    }),
+                  ),
                 const SizedBox(width: 12),
                 FilterChip(
                   label: const Text('Media only'),

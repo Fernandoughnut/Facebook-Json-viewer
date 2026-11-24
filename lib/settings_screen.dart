@@ -308,7 +308,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             const SnackBar(content: Text('Use at least 4 digits.')),
           );
         }
-      } else if (pin.text != confirm.text) {
+      } else if (pin.text.trim() != confirm.text.trim()) {
         if (context.mounted) {
           ScaffoldMessenger.of(
             context,

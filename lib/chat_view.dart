@@ -285,6 +285,15 @@ class _ChatViewState extends State<ChatView> {
     return messageMatches(m, q);
   }
 
+  /// Literal queries highlight as typed; regex queries highlight only the
+  /// substring that matched this message's text (never a sender/file match).
+  String _highlightFor(Msg m) {
+    if (!useRegex) return query;
+    return _compiledRegex?.firstMatch(m.text)?.group(0) ?? '';
+  }
+
+  bool get _highlightExact => useRegex || caseSensitive;
+
   void recompute() {
     final q = query;
     _compiledRegex = null;
@@ -501,17 +510,11 @@ class _ChatViewState extends State<ChatView> {
       lastDate: DateTime(last.year, last.month, last.day),
     );
     if (picked == null || !mounted) return;
-    final target = picked.add(const Duration(days: 1)).millisecondsSinceEpoch;
-    var lo = 0, hi = view.length;
-    while (lo < hi) {
-      final mid = (lo + hi) >> 1;
-      if ((view[mid].t ?? 0) < target) {
-        lo = mid + 1;
-      } else {
-        hi = mid;
-      }
-    }
-    jumpToMessage(lo.clamp(0, view.length - 1).toInt());
+    // showDatePicker returns midnight, so the first message at/after midnight
+    // is the first message on the chosen day. Adding a day skipped it.
+    final target = picked.millisecondsSinceEpoch;
+    final idx = firstIndexAtOrAfter(view, target, (m) => m.t ?? 0);
+    jumpToMessage(idx.clamp(0, view.length - 1).toInt());
   }
 
   // ---------- export ----------
@@ -1431,88 +1434,92 @@ class _ChatViewState extends State<ChatView> {
 
   Future<void> showSavedSearches() async {
     final name = TextEditingController();
-    await showDialog<void>(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDialog) => AlertDialog(
-          title: const Text('Saved searches'),
-          content: SizedBox(
-            width: math.min(520.0, MediaQuery.sizeOf(ctx).width - 48),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: name,
-                  decoration: const InputDecoration(
-                    labelText: 'Name for the current search',
-                    hintText: 'e.g. photos from Ana',
-                    isDense: true,
+    try {
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => StatefulBuilder(
+          builder: (ctx, setDialog) => AlertDialog(
+            title: const Text('Saved searches'),
+            content: SizedBox(
+              width: math.min(520.0, MediaQuery.sizeOf(ctx).width - 48),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    controller: name,
+                    decoration: const InputDecoration(
+                      labelText: 'Name for the current search',
+                      hintText: 'e.g. photos from Ana',
+                      isDense: true,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 8),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: FilledButton.icon(
-                    icon: const Icon(Icons.bookmark_add_outlined, size: 18),
-                    label: const Text('Save current filters'),
-                    onPressed: () {
-                      final n = name.text.trim();
-                      if (n.isEmpty) return;
-                      settings.savePreset(currentPreset(n));
-                      name.clear();
-                      setDialog(() {});
-                    },
-                  ),
-                ),
-                const SizedBox(height: 12),
-                if (settings.presets.isEmpty)
-                  const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 16),
-                    child: Text('No saved searches yet.'),
-                  )
-                else
-                  Flexible(
-                    child: ListView.builder(
-                      shrinkWrap: true,
-                      itemCount: settings.presets.length,
-                      itemBuilder: (context, i) {
-                        final p = settings.presets[i];
-                        return ListTile(
-                          dense: true,
-                          title: Text(p.name),
-                          subtitle: Text(
-                            p.summary,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          onTap: () {
-                            Navigator.pop(ctx);
-                            applyPreset(p);
-                          },
-                          trailing: IconButton(
-                            tooltip: 'Delete ${p.name}',
-                            icon: const Icon(Icons.delete_outline, size: 18),
-                            onPressed: () {
-                              settings.deletePreset(p.name);
-                              setDialog(() {});
-                            },
-                          ),
-                        );
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: FilledButton.icon(
+                      icon: const Icon(Icons.bookmark_add_outlined, size: 18),
+                      label: const Text('Save current filters'),
+                      onPressed: () {
+                        final n = name.text.trim();
+                        if (n.isEmpty) return;
+                        settings.savePreset(currentPreset(n));
+                        name.clear();
+                        setDialog(() {});
                       },
                     ),
                   ),
-              ],
+                  const SizedBox(height: 12),
+                  if (settings.presets.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 16),
+                      child: Text('No saved searches yet.'),
+                    )
+                  else
+                    Flexible(
+                      child: ListView.builder(
+                        shrinkWrap: true,
+                        itemCount: settings.presets.length,
+                        itemBuilder: (context, i) {
+                          final p = settings.presets[i];
+                          return ListTile(
+                            dense: true,
+                            title: Text(p.name),
+                            subtitle: Text(
+                              p.summary,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            onTap: () {
+                              Navigator.pop(ctx);
+                              applyPreset(p);
+                            },
+                            trailing: IconButton(
+                              tooltip: 'Delete ${p.name}',
+                              icon: const Icon(Icons.delete_outline, size: 18),
+                              onPressed: () {
+                                settings.deletePreset(p.name);
+                                setDialog(() {});
+                              },
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                ],
+              ),
             ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Close'),
+              ),
+            ],
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Close'),
-            ),
-          ],
         ),
-      ),
-    );
+      );
+    } finally {
+      name.dispose();
+    }
   }
 
   // ---------- activity rail ----------
@@ -1648,6 +1655,40 @@ class _ChatViewState extends State<ChatView> {
   }
 
   // ---------- jumping around ----------
+
+  /// Step through search hits. In panel mode [results] holds the matching view
+  /// indices; in-place mode [view] already contains only matches. [delta] is
+  /// in visible order, so reversed layouts still move down on F3.
+  void stepMatch(int delta) {
+    if (query.isEmpty) return;
+    final visibleDelta = panelMode
+        ? (dateSort &&
+                  ((sort == SortMode.oldest) == settings.resultsNewestFirst)
+              ? -delta
+              : delta)
+        : (_reversed ? -delta : delta);
+    final matches = panelMode
+        ? results
+        : List<int>.generate(view.length, (i) => i);
+    if (matches.isEmpty) return;
+    final pos = nextMatchPosition(highlight, matches, visibleDelta);
+    if (pos >= 0) jumpToMessage(matches[pos]);
+  }
+
+  /// Esc: close the narrow results panel first, then clear the search.
+  void clearSearchOrResults() {
+    if (resultsOpen && !_wide) {
+      setState(() => resultsOpen = false);
+      return;
+    }
+    if (query.isEmpty) return;
+    _searchTimer?.cancel();
+    setState(() {
+      qc.clear();
+      recompute();
+      if (panelMode) resultsOpen = false;
+    });
+  }
 
   /// Scroll the conversation to message [idx] (an index into [view]) and flash it.
   void jumpToMessage(int idx) {
@@ -1933,6 +1974,11 @@ class _ChatViewState extends State<ChatView> {
           bindings: {
             const SingleActivator(LogicalKeyboardKey.keyF, control: true): () =>
                 searchFocus.requestFocus(),
+            const SingleActivator(LogicalKeyboardKey.f3): () => stepMatch(1),
+            const SingleActivator(LogicalKeyboardKey.f3, shift: true): () =>
+                stepMatch(-1),
+            const SingleActivator(LogicalKeyboardKey.escape):
+                clearSearchOrResults,
           },
           child: Focus(
             autofocus: true,
@@ -1989,15 +2035,9 @@ class _ChatViewState extends State<ChatView> {
     final q = query;
     final compact = settings.resultsLayout == ResultsLayout.compact;
     final newestFirst = settings.resultsNewestFirst;
-    final order = [...results];
-    // `results` follows the order of the chat; flip it so it matches "newest first / oldest first"
-    if (dateSort && ((sort == SortMode.oldest) == newestFirst)) {
-      for (var i = 0, j = order.length - 1; i < j; i++, j--) {
-        final tmp = order[i];
-        order[i] = order[j];
-        order[j] = tmp;
-      }
-    }
+    // `results` follows the order of the chat; map the index instead of
+    // copying and reversing tens of thousands of entries on every rebuild.
+    final reverse = dateSort && ((sort == SortMode.oldest) == newestFirst);
     final muted = Theme.of(context).colorScheme.outline;
 
     return Column(
@@ -2044,14 +2084,15 @@ class _ChatViewState extends State<ChatView> {
         ),
         const Divider(height: 1),
         Expanded(
-          child: order.isEmpty
+          child: results.isEmpty
               ? const Center(child: Text('No matches'))
               : ListView.builder(
-                  itemCount: order.length,
+                  itemCount: results.length,
                   itemBuilder: (context, i) {
-                    final idx = order[i];
+                    final idx = results[reverse ? results.length - 1 - i : i];
                     final m = view[idx];
                     final when = '${fmtDate(m.t)} ${fmtTime(m.t)}';
+                    final hq = _highlightFor(m);
                     if (compact) {
                       return ListTile(
                         dense: true,
@@ -2065,10 +2106,15 @@ class _ChatViewState extends State<ChatView> {
                                 style: TextStyle(color: muted, fontSize: 12),
                               ),
                               ...highlightSpans(
-                                snippet(m.text, q).replaceAll('\n', ' '),
-                                q,
+                                snippet(
+                                  m.text,
+                                  hq,
+                                  caseSensitive: _highlightExact,
+                                ).replaceAll('\n', ' '),
+                                hq,
                                 null,
                                 kHighlightColor,
+                                caseSensitive: _highlightExact,
                               ),
                             ],
                           ),
@@ -2084,10 +2130,11 @@ class _ChatViewState extends State<ChatView> {
                       title: Text.rich(
                         TextSpan(
                           children: highlightSpans(
-                            snippet(m.text, q),
-                            q,
+                            snippet(m.text, hq, caseSensitive: _highlightExact),
+                            hq,
                             null,
                             kHighlightColor,
+                            caseSensitive: _highlightExact,
                           ),
                         ),
                         maxLines: 3,
@@ -2147,6 +2194,9 @@ class _ChatViewState extends State<ChatView> {
               store: widget.store,
               chat: widget.chat,
               query: query,
+              regex: useRegex,
+              caseSensitive: caseSensitive,
+              compiledRegex: _compiledRegex,
               highlighted: highlight == idx,
               bookmarked: widget.store.isBookmarked(widget.chat, m),
               onToggleBookmark: () =>
