@@ -4,8 +4,7 @@ A viewer and organizer for exported Facebook / Messenger messages.
 
 Message exports, especially from end-to-end encrypted chats, arrive as JSON files that are unreadable as they are. Messages Viewer turns them into normal chat threads you can scroll, search and filter, with your photos shown inline. Everything runs on your own device. Nothing is uploaded anywhere.
 
-Built with Flutter. Linux works, Android is next. Capiche?
-Made with inspiration from previous projects related to json file viewers(and some other things)
+Built with Flutter. Linux works today; Android is next.
 
 ## Features
 
@@ -21,7 +20,10 @@ Made with inspiration from previous projects related to json file viewers(and so
 - Media info dialog per conversation: how many files are referenced, how many were found (and in which kind of folder), and the names of the missing ones.
 - Search, filtering by sender and "media only".
 - Optional search results panel: lists every match, highlights the search words, and jumps to the message in the full conversation when you click a result.
-- Large files are parsed in a background isolate, so the window does not freeze.
+- Large files are parsed in a background isolate, so the window does not freeze, and a progress bar shows while files or folders are being read.
+- Remembers your session: the next time you start, the same JSON files, shared media folders, per-conversation folders, your "I am" name and the last open conversation come back automatically (can be turned off).
+- Settings screen: light / dark / system theme, accent color, text size, 12- or 24-hour clock, show or hide message times, photo width in chat, gallery tile size.
+- `Ctrl+F` jumps to the search box.
 
 ## Requirements
 
@@ -79,7 +81,6 @@ flutter run -d linux
 | `lib/store.dart` | App state: loaded conversations, media folders, lookup, session restore |
 | `lib/settings.dart` | User settings and the remembered session, saved to one JSON file |
 
-
 `fb-messages-viewer.html` is the earlier single-file browser prototype of the same idea.
 
 ## Current limitations
@@ -101,8 +102,8 @@ flutter run -d linux
 ## Roadmap
 
 1. Android build: folder access, video and audio playback, testing on an Android 17 (AOSP) phone and an Android 14 tablet.
-2. Local SQLite database: remember conversations and folders, fast search, quick re-opening of large exports.
-3. Settings: theme and other options...
+2. Local SQLite database: store parsed messages, fast search, quick re-opening of large exports.
+3. More settings and polish.
 4. Export of the current view to text or CSV, and search across all conversations.
 
 ## Privacy
