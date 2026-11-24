@@ -52,7 +52,7 @@ flutter pub add file_picker scrollable_positioned_list
 rm test/widget_test.dart
 ```
 
-Copy `main.dart`, `models.dart`, `parser.dart` and `store.dart` into `fb_viewer/lib/`, replacing the generated `main.dart`. Then:
+Copy `main.dart`, `models.dart`, `parser.dart`, `settings.dart` and `store.dart` into `fb_viewer/lib/`, replacing the generated `main.dart`. Then:
 
 ```bash
 flutter run -d linux
@@ -76,7 +76,9 @@ flutter run -d linux
 | `lib/main.dart` | User interface: conversation list, chat view, results panel, media dialog, photo viewer |
 | `lib/models.dart` | Data classes: messages, media, conversations, media folders |
 | `lib/parser.dart` | Tolerant JSON parser, encoding fix, background-isolate helpers |
-| `lib/store.dart` | App state: loaded conversations, media folders and lookup |
+| `lib/store.dart` | App state: loaded conversations, media folders, lookup, session restore |
+| `lib/settings.dart` | User settings and the remembered session, saved to one JSON file |
+
 
 `fb-messages-viewer.html` is the earlier single-file browser prototype of the same idea.
 
