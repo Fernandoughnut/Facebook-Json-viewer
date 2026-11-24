@@ -1,0 +1,539 @@
+// Message widgets and dialogs: bubbles, reply quotes, message details, media info, photo viewer.
+
+import 'dart:convert';
+import 'dart:io';
+import 'dart:math' as math;
+
+import 'package:material_ui/material_ui.dart';
+import 'package:flutter/services.dart';
+
+import 'models.dart';
+import 'settings.dart';
+import 'store.dart';
+import 'util.dart';
+
+/// A stable color for a person's name (used by the plain layout).
+Color nameColor(String name, Brightness b) {
+  var h = 0;
+  for (final c in name.codeUnits) {
+    h = (h * 31 + c) & 0x7fffffff;
+  }
+  return HSLColor.fromAHSL(1, (h % 360).toDouble(), 0.55, b == Brightness.dark ? 0.72 : 0.36).toColor();
+}
+
+// ---------- message details (raw JSON, reply info) ----------
+
+Future<void> showMsgDetails(BuildContext context, Msg m, Chat chat) {
+  String json;
+  try {
+    json = const JsonEncoder.withIndent('  ').convert(m.raw);
+  } catch (e) {
+    json = '(cannot show: $e)';
+  }
+  final r = m.reply;
+  final lines = <String>[
+    'From: ${m.sender}',
+    'Time: ${fmtDate(m.t)} ${fmtTime(m.t)}   (${m.t})',
+    'Message ID: ${m.id.isEmpty ? '(none found)' : m.id}',
+    if (r == null)
+      'Reply info: none found in this message (its fields: ${m.raw.keys.join(', ')})'
+    else
+      'Replies to: ${m.replyTarget != null ? 'found in this conversation (${m.replyTarget!.sender})' : 'not found in this conversation'}'
+          '${r.id.isNotEmpty ? ', id ${r.id}' : ''}',
+  ];
+  return showDialog<void>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('Message details'),
+      content: SizedBox(
+        width: math.max(240.0, math.min(620.0, MediaQuery.sizeOf(ctx).width - 48)),
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SelectableText(lines.join('\n')),
+              const SizedBox(height: 12),
+              Text('Original data from the export', style: Theme.of(ctx).textTheme.titleSmall),
+              const SizedBox(height: 4),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Theme.of(ctx).colorScheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: SelectableText(json, style: const TextStyle(fontFamily: 'monospace', fontSize: 12)),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Clipboard.setData(ClipboardData(text: json)),
+          child: const Text('Copy JSON'),
+        ),
+        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close')),
+      ],
+    ),
+  );
+}
+
+// ---------- media info dialog ----------
+
+Future<void> showMediaInfo(BuildContext context, Store store, Chat chat) {
+  return showDialog<void>(
+    context: context,
+    builder: (ctx) => ListenableBuilder(
+      listenable: store,
+      builder: (ctx, _) {
+        final st = store.statsFor(chat);
+
+        Widget dirTile(MediaDir d, Chat? owner) => ListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.folder),
+              title: SelectableText(d.path),
+              subtitle: Text('${d.count} files'),
+              trailing: IconButton(
+                tooltip: 'Remove this folder',
+                icon: const Icon(Icons.close),
+                onPressed: () => store.removeMediaDir(d, chat: owner),
+              ),
+            );
+
+        Future<void> add(Chat? owner) async {
+          final dir = await pickFolder(store);
+          if (dir != null) await store.addMediaDir(dir, chat: owner);
+        }
+
+        final heading = Theme.of(ctx).textTheme.titleSmall;
+        return AlertDialog(
+          title: Text('Media: ${chat.title}', maxLines: 1, overflow: TextOverflow.ellipsis),
+          content: SizedBox(
+            width: math.max(240.0, math.min(560.0, MediaQuery.sizeOf(ctx).width - 48)),
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (store.busy) const Padding(padding: EdgeInsets.only(bottom: 8), child: LinearProgressIndicator()),
+                  Text('Photos, videos and files referenced by this conversation: ${st.total}'),
+                  Text('Found: ${st.fromChat + st.fromShared} '
+                      '(${st.fromChat} in this conversation\'s folders, ${st.fromShared} in shared folders)'),
+                  Text('Missing: ${st.missing}'),
+                  if (st.missing > 0)
+                    ExpansionTile(
+                      tilePadding: EdgeInsets.zero,
+                      title: const Text('Show missing file names'),
+                      children: [
+                        for (final n in st.missingSample)
+                          Align(alignment: Alignment.centerLeft, child: SelectableText(n)),
+                        if (st.missing > st.missingSample.length)
+                          Text('… and ${st.missing - st.missingSample.length} more'),
+                      ],
+                    ),
+                  const SizedBox(height: 16),
+                  Text('Folders for this conversation only', style: heading),
+                  if (chat.dirs.isEmpty) const Text('None yet.'),
+                  for (final d in chat.dirs) dirTile(d, chat),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      onPressed: () => add(chat),
+                      icon: const Icon(Icons.create_new_folder),
+                      label: const Text('Add folder for this conversation'),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text('Shared folders (used by every conversation)', style: heading),
+                  if (store.sharedDirs.isEmpty) const Text('None yet.'),
+                  for (final d in store.sharedDirs) dirTile(d, null),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      onPressed: () => add(null),
+                      icon: const Icon(Icons.folder_shared),
+                      label: const Text('Add shared folder'),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Lookup order: this conversation\'s folders first, then the shared ones. '
+                    'Files are matched by the file name written in the JSON.',
+                    style: Theme.of(ctx).textTheme.bodySmall,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close'))],
+        );
+      },
+    ),
+  );
+}
+
+// ---------- quoted reply ----------
+
+/// The small block shown above a message that replies to another one.
+class ReplyQuote extends StatelessWidget {
+  final Msg m;
+  final Color fg;
+  final void Function(Msg target) onOpen;
+  const ReplyQuote({super.key, required this.m, required this.fg, required this.onOpen});
+
+  @override
+  Widget build(BuildContext context) {
+    final r = m.reply!;
+    final target = m.replyTarget;
+    final who = target?.sender ?? (r.sender.isNotEmpty ? r.sender : 'a message');
+    var text = target != null ? target.text : r.text;
+    if (text.isEmpty && target != null && target.media.isNotEmpty) {
+      text = '📎 ${target.media.first.kind.replaceAll('_', ' ')}';
+    }
+    if (text.isEmpty) text = target == null ? 'Original message is not in this export' : '(no text)';
+
+    final soft = fg.withValues(alpha: 0.85);
+    final box = Container(
+      margin: const EdgeInsets.only(bottom: 4),
+      padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
+      decoration: BoxDecoration(
+        color: fg.withValues(alpha: 0.12),
+        border: Border(left: BorderSide(color: fg.withValues(alpha: 0.6), width: 3)),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text('↩ Replying to $who', style: TextStyle(color: soft, fontSize: 11, fontWeight: FontWeight.w600)),
+          Text(text, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(color: soft, fontSize: 12)),
+        ],
+      ),
+    );
+    if (target == null) return box;
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(onTap: () => onOpen(target), child: box),
+    );
+  }
+}
+
+// ---------- one message ----------
+
+class Bubble extends StatelessWidget {
+  final Msg m;
+  final bool mine;
+  final bool showName;
+  final bool showDate; // put the date next to the time (used when messages are not in date order)
+  final Store store;
+  final Chat chat;
+  final String query;
+  final bool highlighted;
+  final void Function(String path) onPic;
+  final void Function(Msg target) onOpenReply;
+
+  const Bubble({
+    super.key,
+    required this.m,
+    required this.mine,
+    required this.showName,
+    required this.showDate,
+    required this.store,
+    required this.chat,
+    required this.query,
+    required this.highlighted,
+    required this.onPic,
+    required this.onOpenReply,
+  });
+
+  AppSettings get st => store.settings;
+
+  String get stamp => showDate ? '${fmtDate(m.t)} ${fmtTime(m.t)}' : fmtTime(m.t);
+
+  void details(BuildContext context) => showMsgDetails(context, m, chat);
+
+  Widget mediaWidget(BuildContext context, Media x, Color fg) {
+    final label = x.kind.replaceAll('_', ' ');
+    final p = store.findMedia(x.uri, chat);
+    if (p == null) {
+      final miss = store.hasMedia(chat) && x.uri.isNotEmpty ? ' (not found in media folders)' : '';
+      return Padding(
+        padding: const EdgeInsets.only(top: 4),
+        child: Text(
+          '📎 $label${x.uri.isEmpty ? '' : ': ${x.name}'}$miss',
+          style: TextStyle(fontSize: 12, color: fg.withValues(alpha: 0.8)),
+        ),
+      );
+    }
+    if (isImagePath(p)) {
+      final w = st.chatImageWidth;
+      return Padding(
+        padding: const EdgeInsets.only(top: 4),
+        child: GestureDetector(
+          onTap: () => onPic(p),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(maxHeight: w * 1.5),
+              child: Image.file(
+                File(p),
+                width: w,
+                cacheWidth: (w * 2).round(), // decode small: keeps big chats light on memory
+                fit: BoxFit.contain,
+                filterQuality: FilterQuality.low,
+                gaplessPlayback: true,
+                // a fixed-size placeholder until the picture is ready, so the list does not jump around
+                frameBuilder: (context, child, frame, sync) {
+                  if (sync || frame != null) return child;
+                  return Container(
+                    width: w,
+                    height: w * 0.75,
+                    color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                  );
+                },
+                errorBuilder: (_, _, _) => Text('⚠ cannot show ${x.name}', style: TextStyle(color: fg)),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: ActionChip(
+        avatar: const Icon(Icons.play_arrow, size: 18),
+        label: Text('$label: ${x.name}', overflow: TextOverflow.ellipsis),
+        onPressed: () => openExternal(p, context),
+      ),
+    );
+  }
+
+  /// Text, photos and links of the message (used by the bubble layouts).
+  List<Widget> body(BuildContext context, TextStyle base, Color fg) {
+    final out = <Widget>[];
+    if (m.text.isNotEmpty) {
+      out.add(SelectableText.rich(TextSpan(children: highlightSpans(m.text, query, base, Colors.amber))));
+    } else if (m.unsent) {
+      out.add(Text('This message was unsent', style: base));
+    }
+    for (final x in m.media) {
+      out.add(mediaWidget(context, x, fg));
+    }
+    if (m.share.isNotEmpty) out.add(SelectableText('🔗 ${m.share}', style: base));
+    if (out.isEmpty) {
+      out.add(Text(
+        '[${m.type.isEmpty ? 'empty message' : m.type}]',
+        style: base.copyWith(color: fg.withValues(alpha: 0.7)),
+      ));
+    }
+    return out;
+  }
+
+  Widget metaRow(BuildContext context) {
+    final style = Theme.of(context).textTheme.labelSmall;
+    final showStamp = st.showTimes || showDate;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 1, 8, 0),
+      child: InkWell(
+        onTap: () => details(context),
+        onLongPress: () => details(context),
+        child: showStamp
+            ? Text(stamp, style: style)
+            : Icon(Icons.info_outline, size: 12, color: style?.color),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final child = switch (st.layout) {
+      ChatLayout.plain => plain(context),
+      ChatLayout.compact => bubble(context, compact: true),
+      ChatLayout.bubbles => bubble(context, compact: false),
+    };
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onSecondaryTap: () => details(context),
+      child: child,
+    );
+  }
+
+  Widget bubble(BuildContext context, {required bool compact}) {
+    final cs = Theme.of(context).colorScheme;
+    final bg = mine ? cs.primary : cs.surfaceContainerHighest;
+    final fg = mine ? cs.onPrimary : cs.onSurface;
+    final maxW = math.min(560.0, MediaQuery.of(context).size.width * 0.8);
+    final base = TextStyle(
+      color: fg,
+      fontSize: compact ? 13 : null,
+      fontStyle: m.unsent ? FontStyle.italic : FontStyle.normal,
+    );
+
+    final content = <Widget>[
+      if (st.showReplies && m.reply != null) ReplyQuote(m: m, fg: fg, onOpen: onOpenReply),
+      ...body(context, base, fg),
+    ];
+
+    return Align(
+      alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
+      child: Padding(
+        padding: EdgeInsets.symmetric(vertical: compact ? 0 : 1),
+        child: Column(
+          crossAxisAlignment: mine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+          children: [
+            if (showName && !mine)
+              Padding(
+                padding: EdgeInsets.fromLTRB(8, compact ? 3 : 6, 8, 1),
+                child: Text(m.sender, style: Theme.of(context).textTheme.labelSmall),
+              ),
+            Container(
+              constraints: BoxConstraints(maxWidth: maxW),
+              padding: compact
+                  ? const EdgeInsets.symmetric(horizontal: 10, vertical: 5)
+                  : const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: bg,
+                borderRadius: BorderRadius.circular(compact ? 12 : 16),
+                border: highlighted ? Border.all(color: Colors.amber, width: 3) : null,
+              ),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: content),
+            ),
+            if (m.reactions.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(8, 2, 8, 0),
+                child: Text(
+                  m.reactions.map((r) => r.actor.isEmpty ? r.emoji : '${r.emoji} ${r.actor}').join(' · '),
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
+            metaRow(context),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// One dense line per message: "14:22  Name: text", like a chat log.
+  Widget plain(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final base = theme.textTheme.bodyMedium;
+    final nameCol = mine ? cs.primary : nameColor(m.sender, theme.brightness);
+
+    final spans = <InlineSpan>[
+      if (st.showTimes || showDate) TextSpan(text: '$stamp  ', style: TextStyle(color: cs.outline, fontSize: 12)),
+      TextSpan(text: m.sender, style: TextStyle(color: nameCol, fontWeight: FontWeight.w600)),
+      const TextSpan(text: ':  '),
+    ];
+    if (m.text.isNotEmpty) {
+      spans.addAll(highlightSpans(m.text, query, null, Colors.amber));
+    } else if (m.unsent) {
+      spans.add(const TextSpan(text: 'This message was unsent', style: TextStyle(fontStyle: FontStyle.italic)));
+    } else if (m.media.isEmpty && m.share.isEmpty) {
+      spans.add(TextSpan(text: '[${m.type.isEmpty ? 'empty message' : m.type}]', style: TextStyle(color: cs.outline)));
+    }
+
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 1),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: highlighted
+          ? BoxDecoration(
+              color: Colors.amber.withValues(alpha: 0.25),
+              border: Border.all(color: Colors.amber, width: 2),
+              borderRadius: BorderRadius.circular(6),
+            )
+          : null,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (st.showReplies && m.reply != null) ReplyQuote(m: m, fg: cs.onSurface, onOpen: onOpenReply),
+          SelectableText.rich(TextSpan(style: base, children: spans)),
+          for (final x in m.media) mediaWidget(context, x, cs.onSurface),
+          if (m.share.isNotEmpty) SelectableText('🔗 ${m.share}', style: base),
+          if (m.reactions.isNotEmpty)
+            Text(
+              m.reactions.map((r) => r.actor.isEmpty ? r.emoji : '${r.emoji} ${r.actor}').join(' · '),
+              style: theme.textTheme.bodySmall,
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+// ---------- full-screen photo viewer ----------
+
+class PicPager extends StatefulWidget {
+  final List<Pic> pics;
+  final int start;
+  const PicPager({super.key, required this.pics, required this.start});
+
+  @override
+  State<PicPager> createState() => _PicPagerState();
+}
+
+class _PicPagerState extends State<PicPager> {
+  late final PageController ctrl = PageController(initialPage: widget.start);
+  late int index = widget.start;
+
+  @override
+  void dispose() {
+    ctrl.dispose();
+    super.dispose();
+  }
+
+  void go(int delta) {
+    ctrl.animateToPage(
+      (index + delta).clamp(0, widget.pics.length - 1).toInt(),
+      duration: const Duration(milliseconds: 200),
+      curve: Curves.easeOut,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.arrowLeft): () => go(-1),
+        const SingleActivator(LogicalKeyboardKey.arrowRight): () => go(1),
+        const SingleActivator(LogicalKeyboardKey.escape): () => Navigator.of(context).pop(),
+      },
+      child: Focus(
+        autofocus: true,
+        child: Scaffold(
+          backgroundColor: Colors.black,
+          appBar: AppBar(
+            backgroundColor: Colors.black,
+            foregroundColor: Colors.white,
+            title: Text('${index + 1} / ${widget.pics.length}'),
+          ),
+          body: PageView.builder(
+            controller: ctrl,
+            itemCount: widget.pics.length,
+            onPageChanged: (i) => setState(() => index = i),
+            itemBuilder: (context, i) {
+              final p = widget.pics[i];
+              return Column(
+                children: [
+                  Expanded(
+                    child: InteractiveViewer(
+                      maxScale: 6,
+                      child: Center(child: Image.file(File(p.path), fit: BoxFit.contain)),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Text(p.caption, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white70)),
+                  ),
+                ],
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+}
