@@ -20,10 +20,7 @@ Built with Flutter. Linux works today; Android is next.
 - Media info dialog per conversation: how many files are referenced, how many were found (and in which kind of folder), and the names of the missing ones.
 - Search, filtering by sender and "media only".
 - Optional search results panel: lists every match, highlights the search words, and jumps to the message in the full conversation when you click a result.
-- Large files are parsed in a background isolate, so the window does not freeze, and a progress bar shows while files or folders are being read.
-- Remembers your session: the next time you start, the same JSON files, shared media folders, per-conversation folders, your "I am" name and the last open conversation come back automatically (can be turned off).
-- Settings screen: light / dark / system theme, accent color, text size, 12- or 24-hour clock, show or hide message times, photo width in chat, gallery tile size.
-- `Ctrl+F` jumps to the search box.
+- Large files are parsed in a background isolate, so the window does not freeze.
 
 ## Requirements
 
@@ -54,7 +51,7 @@ flutter pub add file_picker scrollable_positioned_list
 rm test/widget_test.dart
 ```
 
-Copy `main.dart`, `models.dart`, `parser.dart`, `settings.dart` and `store.dart` into `fb_viewer/lib/`, replacing the generated `main.dart`. Then:
+Copy `main.dart`, `models.dart`, `parser.dart` and `store.dart` into `fb_viewer/lib/`, replacing the generated `main.dart`. Then:
 
 ```bash
 flutter run -d linux
@@ -78,15 +75,13 @@ flutter run -d linux
 | `lib/main.dart` | User interface: conversation list, chat view, results panel, media dialog, photo viewer |
 | `lib/models.dart` | Data classes: messages, media, conversations, media folders |
 | `lib/parser.dart` | Tolerant JSON parser, encoding fix, background-isolate helpers |
-| `lib/store.dart` | App state: loaded conversations, media folders, lookup, session restore |
-| `lib/settings.dart` | User settings and the remembered session, saved to one JSON file |
+| `lib/store.dart` | App state: loaded conversations, media folders and lookup |
 
 `fb-messages-viewer.html` is the earlier single-file browser prototype of the same idea.
 
 ## Current limitations
 
-- The app remembers which files and folders you opened, not the messages themselves, so a large export is parsed again on every start. A local database (see the roadmap) will fix that.
-- Settings and the remembered session are saved to `~/.config/fb_viewer/state.json` (Linux). Android storage for this is not built yet.
+- Loaded conversations and chosen media folders are not remembered between runs yet.
 - Android folder access is not built yet. The folder picker returns a `content://` handle there, and the app shows a message instead of reading it.
 - Videos and voice clips open in the default player on Linux only.
 - HEIC photos cannot be displayed.
@@ -102,8 +97,8 @@ flutter run -d linux
 ## Roadmap
 
 1. Android build: folder access, video and audio playback, testing on an Android 17 (AOSP) phone and an Android 14 tablet.
-2. Local SQLite database: store parsed messages, fast search, quick re-opening of large exports.
-3. More settings and polish.
+2. Local SQLite database: remember conversations and folders, fast search, quick re-opening of large exports.
+3. Settings: theme and other options.
 4. Export of the current view to text or CSV, and search across all conversations.
 
 ## Privacy
