@@ -108,6 +108,8 @@ flutter build linux --release
 
 The executable is `build/linux/x64/release/bundle/indexed`; distribute the whole `bundle` folder, not just the executable.
 
+Pushing a version tag such as `v1.1.0` triggers `.github/workflows/release.yml`: GitHub runs the checks, builds the Linux release bundle, packages it as `Indexed-linux-x64-v1.1.0.tar.gz`, and attaches it to a new GitHub Release with a SHA-256 checksum.
+
 To measure parsing on a synthetic 100k-message export:
 
 ```bash
