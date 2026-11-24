@@ -84,7 +84,8 @@ flutter run -d linux
 
 ## Current limitations
 
-- Loaded conversations and chosen media folders are not remembered between runs yet.
+- The app remembers which files and folders you opened, not the messages themselves, so a large export is parsed again on every start. A local database (see the roadmap) will fix that.
+- Settings and the remembered session are saved to `~/.config/fb_viewer/state.json` (Linux). Android storage for this is not built yet.
 - Android folder access is not built yet. The folder picker returns a `content://` handle there, and the app shows a message instead of reading it.
 - Videos and voice clips open in the default player on Linux only.
 - HEIC photos cannot be displayed.
