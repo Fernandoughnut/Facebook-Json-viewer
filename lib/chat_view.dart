@@ -1,0 +1,2203 @@
+// One open conversation: search, filters, sorting, results panel, gallery.
+
+import 'dart:async';
+import 'dart:io';
+import 'dart:math' as math;
+
+import 'package:material_ui/material_ui.dart';
+import 'package:flutter/services.dart';
+import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
+
+import 'exporter.dart';
+import 'models.dart';
+import 'settings.dart';
+import 'store.dart';
+import 'util.dart';
+import 'widgets.dart';
+
+enum _ExportScope { whole, view, selected }
+
+class _ExportRequest {
+  final _ExportScope scope;
+  final ExportFormat format;
+  final ExportOptions options;
+  const _ExportRequest(this.scope, this.format, this.options);
+}
+
+String _exportScopeLabel(_ExportScope scope) => switch (scope) {
+  _ExportScope.whole => 'Whole conversation',
+  _ExportScope.view => 'Current view / search results',
+  _ExportScope.selected => 'Selected messages',
+};
+
+String _exportFormatLabel(ExportFormat format) => switch (format) {
+  ExportFormat.json => 'JSON',
+  ExportFormat.csv => 'CSV',
+  ExportFormat.text => 'Text',
+};
+
+enum _ChatMenuAction {
+  focusSearch,
+  panel,
+  regex,
+  caseSensitive,
+  mediaOnly,
+  clearFilters,
+  peopleFilters,
+  savedSearches,
+  gallery,
+  mediaInfo,
+  miniMap,
+  jumpToDate,
+  select,
+  export,
+}
+
+class ActivityBucket {
+  final int t;
+  final int count;
+  final String label; // YYYY-MM
+  const ActivityBucket(this.t, this.count, this.label);
+}
+
+class _BucketBuilder {
+  final int t;
+  final String label;
+  int count = 0;
+  _BucketBuilder(this.t, this.label);
+}
+
+class ChatView extends StatefulWidget {
+  final Store store;
+  final Chat chat;
+
+  /// When opened from global search, scroll to this message once after layout.
+  final Msg? initialTarget;
+  const ChatView({
+    super.key,
+    required this.store,
+    required this.chat,
+    this.initialTarget,
+  });
+
+  @override
+  State<ChatView> createState() => _ChatViewState();
+}
+
+class _ChatViewState extends State<ChatView> {
+  final qc = TextEditingController();
+  final searchFocus = FocusNode();
+  final MenuController _menuController = MenuController();
+
+  // A fresh controller is made every time the list is rebuilt from scratch: a scroll
+  // controller can only belong to one list at a time.
+  ItemScrollController scroll = ItemScrollController();
+  ItemPositionsListener positions = ItemPositionsListener.create();
+
+  String? sender;
+  bool mediaOnly = false;
+  bool gallery = false;
+  SortMode sort = SortMode.oldest;
+
+  /// Results panel mode (optional). Off: typing in the search box filters the chat in place.
+  /// On: the chat stays complete, matches are listed in a panel, and clicking one jumps to it.
+  bool panelMode = false;
+  bool resultsOpen =
+      false; // narrow screens only: the panel replaces the chat while true
+  bool selecting = false; // multi-select mode: tapping a message toggles it
+  final Set<Msg> selection = {};
+  bool useRegex = false;
+  bool caseSensitive = false;
+
+  List<Msg> view = []; // what the chat list shows, top to bottom
+  List<int> results =
+      []; // indices into [view] that match the search (panel mode only)
+  List<Pic>? _pics;
+  int _picsFor = -1;
+  int _msgCount = -1;
+  int _listGen = 0;
+  String _viewSig = '';
+  int? _lastSavedPosT; // avoid repeated settings writes while scrolling
+  int? _restoreIndex; // the same position as an index into [view]
+  int? highlight; // index into [view] of the message we just jumped to
+  int?
+  _pendingJump; // target from global search, applied after the list is laid out
+  bool _jumpScheduled = false;
+  Timer? _hlTimer;
+  Timer? _searchTimer;
+  RegExp? _compiledRegex;
+  bool _wide = false;
+  late int _settingsRevision;
+  List<ActivityBucket> _activity = const [];
+  String _activitySig = '';
+  Map<String, int> _monthIndex = const {};
+  String _monthSig = '';
+  int _railBucket = -1;
+
+  AppSettings get settings => widget.store.settings;
+  String get query => qc.text.trim();
+  String get _findHint =>
+      Theme.of(context).platform == TargetPlatform.macOS ? '⌘F' : 'Ctrl+F';
+
+  bool get hasActiveFilters =>
+      query.isNotEmpty ||
+      sender != null ||
+      mediaOnly ||
+      useRegex ||
+      caseSensitive ||
+      sort != SortMode.oldest ||
+      selecting;
+
+  /// Messages are in date order (either direction), so day separators make sense.
+  bool get dateSort => sort == SortMode.oldest || sort == SortMode.newest;
+
+  StartAt get _start {
+    final s = settings.startAt;
+    if (s == StartAt.leftOff && _restoreIndex == null) {
+      return StartAt.newest; // nothing saved yet
+    }
+    return s;
+  }
+
+  /// Newest-at-the-bottom is done with a reversed list (index 0 = bottom).
+  bool get _reversed => sort == SortMode.oldest && _start == StartAt.newest;
+
+  @override
+  void initState() {
+    super.initState();
+    _settingsRevision = settings.revision;
+    _lastSavedPosT = settings.chatPos[widget.chat.key];
+    recompute();
+    _msgCount = widget.chat.messages.length;
+    if (widget.initialTarget != null) _pendingJump = _findTargetIndex();
+  }
+
+  int _findTargetIndex() {
+    final t = widget.initialTarget;
+    if (t == null) return -1;
+    var i = view.indexOf(t);
+    if (i >= 0) return i;
+    if (t.id.isNotEmpty) {
+      i = view.indexWhere((m) => m.id == t.id);
+      if (i >= 0) return i;
+    }
+    return view.indexWhere(
+      (m) => m.t == t.t && m.sender == t.sender && m.text == t.text,
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant ChatView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (_msgCount != widget.chat.messages.length) {
+      _msgCount = widget.chat.messages.length;
+      recompute(); // more JSON files were added to this chat
+    }
+    if (_settingsRevision != settings.revision) {
+      _settingsRevision = settings.revision;
+      // Aliases and search settings can change which messages match. With an
+      // active query the in-place view is filtered, so rebuild its matches.
+      if (query.isNotEmpty) recompute();
+      _pics = null; // captions use display names, even without a query
+    }
+    if (oldWidget.initialTarget != widget.initialTarget) {
+      // Two hits can share a timestamp, so the widget is reused and only its
+      // target changes. Schedule the new jump explicitly.
+      _pendingJump = _findTargetIndex();
+      _jumpScheduled = false;
+    }
+  }
+
+  @override
+  void dispose() {
+    positions.itemPositions.removeListener(_onPositions);
+    _hlTimer?.cancel();
+    _searchTimer?.cancel();
+    qc.dispose();
+    searchFocus.dispose();
+    super.dispose();
+  }
+
+  void _onSearchChanged(String _) {
+    // Searching 80,000+ messages on every key is wasteful.
+    _searchTimer?.cancel();
+    _searchTimer = Timer(const Duration(milliseconds: 250), () {
+      if (!mounted) return;
+      setState(() {
+        recompute();
+        if (panelMode) resultsOpen = true;
+      });
+    });
+  }
+
+  Widget _searchToolbar(Widget panelToggle, Widget overflowMenu) {
+    if (!Theme.of(context).useMaterial3) {
+      return Row(
+        children: [
+          Expanded(
+            child: TextField(
+              controller: qc,
+              focusNode: searchFocus,
+              decoration: const InputDecoration(
+                prefixIcon: Icon(Icons.search),
+                hintText: 'Search messages',
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
+              onChanged: _onSearchChanged,
+            ),
+          ),
+          const SizedBox(width: 4),
+          panelToggle,
+          overflowMenu,
+        ],
+      );
+    }
+    return SearchBar(
+      controller: qc,
+      focusNode: searchFocus,
+      hintText: 'Search messages',
+      leading: const Icon(Icons.search),
+      trailing: [panelToggle, overflowMenu],
+      onChanged: _onSearchChanged,
+    );
+  }
+
+  // ---------- what is shown ----------
+
+  bool _hit(Msg m, String q) {
+    if (useRegex) {
+      final re = _compiledRegex;
+      if (re == null) return false; // invalid or empty regex matches nothing
+      return re.hasMatch(m.text) ||
+          re.hasMatch(m.sender) ||
+          re.hasMatch(displayName(m.sender)) ||
+          re.hasMatch(m.share) ||
+          m.media.any((x) => re.hasMatch(x.name));
+    }
+    if (caseSensitive) {
+      return m.text.contains(q) ||
+          m.sender.contains(q) ||
+          displayName(m.sender).contains(q) ||
+          m.share.contains(q) ||
+          m.media.any((x) => x.name.contains(q));
+    }
+    return messageMatches(m, q);
+  }
+
+  void recompute() {
+    final q = query;
+    _compiledRegex = null;
+    if (useRegex && q.isNotEmpty) {
+      try {
+        _compiledRegex = RegExp(q, caseSensitive: caseSensitive);
+      } catch (_) {
+        // An incomplete regex simply matches nothing while typing.
+      }
+    }
+    final inPlace = !panelMode && q.isNotEmpty;
+    final sig =
+        '$sender|$mediaOnly|${sort.index}|$useRegex|$caseSensitive|${inPlace ? q : ''}|${widget.chat.messages.length}';
+    if (sig != _viewSig) {
+      // The list itself changed: rebuild it from scratch at its start position.
+      _viewSig = sig;
+      final list = widget.chat.messages.where((m) {
+        if (sender != null && m.sender != sender) return false;
+        if (mediaOnly && m.media.isEmpty) return false;
+        if (inPlace && !_hit(m, q)) return false;
+        return true;
+      }).toList();
+      view = _sorted(list);
+      // A saved position is only used for "Where I left off"; "Oldest" and
+      // "Newest" must always open at the corresponding end of the conversation.
+      _restoreIndex = settings.startAt == StartAt.leftOff
+          ? _findRestore()
+          : null;
+      _railBucket = -1;
+      _newList();
+    }
+    results = [];
+    if (panelMode && q.isNotEmpty) {
+      for (var i = 0; i < view.length; i++) {
+        if (_hit(view[i], q)) results.add(i);
+      }
+    }
+    _pics = null;
+    highlight = null;
+  }
+
+  List<Msg> _sorted(List<Msg> l) {
+    int byTime(Msg a, Msg b) => (a.t ?? 0).compareTo(b.t ?? 0);
+    switch (sort) {
+      case SortMode.oldest:
+        return l; // messages are already stored oldest first
+      case SortMode.newest:
+        return l.reversed.toList();
+      case SortMode.sender:
+        final lc = <String, String>{};
+        String low(String s) => lc.putIfAbsent(s, () => s.toLowerCase());
+        l.sort((a, b) {
+          final c = low(a.sender).compareTo(low(b.sender));
+          return c != 0 ? c : byTime(a, b);
+        });
+        return l;
+      case SortMode.longest:
+        l.sort((a, b) {
+          final c = b.text.length.compareTo(a.text.length);
+          return c != 0 ? c : byTime(a, b);
+        });
+        return l;
+      case SortMode.reactions:
+        l.sort((a, b) {
+          final c = b.reactions.length.compareTo(a.reactions.length);
+          return c != 0 ? c : byTime(a, b);
+        });
+        return l;
+      case SortMode.media:
+        l.sort((a, b) {
+          final c = b.media.length.compareTo(a.media.length);
+          return c != 0 ? c : byTime(a, b);
+        });
+        return l;
+      case SortMode.threaded:
+        return _threaded(l);
+    }
+  }
+
+  /// Put each reply directly after the message it answers. Replies to replies
+  /// are included recursively; broken reply links leave the message in place.
+  List<Msg> _threaded(List<Msg> l) {
+    final inList = l.toSet();
+    final out = <Msg>[];
+    final used = <Msg>{};
+    void add(Msg m) {
+      if (!used.add(m)) return;
+      out.add(m);
+      for (final r in widget.store.repliesTo(m)) {
+        if (inList.contains(r)) add(r);
+      }
+    }
+
+    for (final m in l) {
+      final parent = m.replyTarget;
+      if (parent == null || !inList.contains(parent)) add(m);
+    }
+    for (final m in l) {
+      add(m); // anything left (cycles, etc.)
+    }
+    return out;
+  }
+
+  /// The saved reading position as an index into [view] (first message at or after that time).
+  int? _findRestore() {
+    // Read the saved position every time: filters/search can rebuild the view
+    // after the chat opened, and scrolling may have saved a newer position.
+    final t = settings.chatPos[widget.chat.key];
+    if (t == null || sort != SortMode.oldest || view.isEmpty) return null;
+    var lo = 0, hi = view.length;
+    while (lo < hi) {
+      final mid = (lo + hi) >> 1;
+      if ((view[mid].t ?? 0) < t) {
+        lo = mid + 1;
+      } else {
+        hi = mid;
+      }
+    }
+    return lo.clamp(0, view.length - 1).toInt();
+  }
+
+  void _newList() {
+    positions.itemPositions.removeListener(_onPositions);
+    scroll = ItemScrollController();
+    positions = ItemPositionsListener.create();
+    positions.itemPositions.addListener(_onPositions);
+    _listGen++;
+  }
+
+  /// Remember the message at the top of the screen, for "where I left off".
+  void _onPositions() {
+    if (view.isEmpty || sort != SortMode.oldest) return;
+    int? top;
+    for (final p in positions.itemPositions.value) {
+      if (p.itemTrailingEdge <= 0 || p.itemLeadingEdge >= 1) {
+        continue; // not on screen
+      }
+      final idx = _reversed ? view.length - 1 - p.index : p.index;
+      if (top == null || idx < top) top = idx;
+    }
+    if (top == null || top >= view.length) return;
+    final t = view[top].t;
+    if (t == null) return;
+    if (_lastSavedPosT == t || settings.chatPos[widget.chat.key] == t) {
+      _lastSavedPosT = t;
+      return;
+    }
+    settings.chatPos[widget.chat.key] = t;
+    _lastSavedPosT = t;
+    settings.save();
+  }
+
+  // ---------- photos ----------
+
+  List<Pic> getPics() {
+    final s = widget.store;
+    if (_pics != null && _picsFor == s.mediaVersion) return _pics!;
+    final out = <Pic>[];
+    final Iterable<Msg> src = (panelMode && query.isNotEmpty)
+        ? results.map((i) => view[i])
+        : view;
+    for (final m in src) {
+      for (final x in m.media) {
+        final p = s.findMedia(x.uri, widget.chat);
+        if (p == null || !isImagePath(p)) continue;
+        final cap =
+            '${displayName(m.sender)} · ${fmtDate(m.t)} ${fmtTime(m.t)}'
+            '${m.text.isNotEmpty ? '\n${m.text}' : ''}\n${p.split(pathSep).last}';
+        out.add(Pic(p, cap));
+      }
+    }
+    _pics = out;
+    _picsFor = s.mediaVersion;
+    return out;
+  }
+
+  void openPager(List<Pic> pics, int start) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => PicPager(pics: pics, start: start),
+      ),
+    );
+  }
+
+  void openPicByPath(String path) {
+    final pics = getPics();
+    final i = pics.indexWhere((p) => p.path == path);
+    if (i >= 0) openPager(pics, i);
+  }
+
+  // ---------- selection and dates ----------
+
+  void toggleSelect(Msg m) => setState(() {
+    if (!selection.remove(m)) selection.add(m);
+  });
+
+  Future<void> jumpToDate() async {
+    if (sort != SortMode.oldest || view.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Switch sorting to "Date: oldest first" to jump by date.',
+          ),
+        ),
+      );
+      return;
+    }
+    final first = DateTime.fromMillisecondsSinceEpoch(view.first.t ?? 0);
+    final last = DateTime.fromMillisecondsSinceEpoch(view.last.t ?? 0);
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: last,
+      firstDate: DateTime(first.year, first.month, first.day),
+      lastDate: DateTime(last.year, last.month, last.day),
+    );
+    if (picked == null || !mounted) return;
+    final target = picked.add(const Duration(days: 1)).millisecondsSinceEpoch;
+    var lo = 0, hi = view.length;
+    while (lo < hi) {
+      final mid = (lo + hi) >> 1;
+      if ((view[mid].t ?? 0) < target) {
+        lo = mid + 1;
+      } else {
+        hi = mid;
+      }
+    }
+    jumpToMessage(lo.clamp(0, view.length - 1).toInt());
+  }
+
+  // ---------- export ----------
+
+  Future<void> export(_ExportRequest request) async {
+    final Iterable<Msg> msgs = switch (request.scope) {
+      _ExportScope.whole => widget.chat.messages,
+      _ExportScope.selected => selection,
+      _ExportScope.view =>
+        (panelMode && query.isNotEmpty) ? results.map((i) => view[i]) : view,
+    };
+    final ext = switch (request.format) {
+      ExportFormat.json => 'json',
+      ExportFormat.csv => 'csv',
+      ExportFormat.text => 'txt',
+    };
+    final mime = switch (request.format) {
+      ExportFormat.json => 'application/json',
+      ExportFormat.csv => 'text/csv',
+      ExportFormat.text => 'text/plain',
+    };
+    final content = encodeExport(
+      widget.chat,
+      msgs,
+      settings: settings,
+      format: request.format,
+      options: request.options,
+    );
+    final suffix = switch (request.scope) {
+      _ExportScope.whole => '_all',
+      _ExportScope.selected => '_selected',
+      _ExportScope.view => '_view',
+    };
+    final name =
+        '${safeFileName(widget.chat.title)}${suffix}_${fmtDate(DateTime.now().millisecondsSinceEpoch)}.$ext';
+    final ok = await saveExport(name, content, mimeType: mime);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(ok ? 'Saved $name' : 'Export cancelled or failed.'),
+      ),
+    );
+  }
+
+  // ---------- toolbar menu ----------
+
+  Future<void> chooseExport() async {
+    var scope = _ExportScope.view;
+    var format = ExportFormat.json;
+    var includeRaw = false;
+    var includeMedia = true;
+    var includeReactions = true;
+    var useDisplayNames = true;
+    final scopes = <_ExportScope>[
+      _ExportScope.whole,
+      _ExportScope.view,
+      if (selection.isNotEmpty) _ExportScope.selected,
+    ];
+
+    final request = await showDialog<_ExportRequest>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialog) => AlertDialog(
+          title: const Text('Export messages'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'What to export',
+                  style: Theme.of(ctx).textTheme.labelLarge,
+                ),
+                RadioGroup<_ExportScope>(
+                  groupValue: scope,
+                  onChanged: (v) => setDialog(() => scope = v ?? scope),
+                  child: Column(
+                    children: [
+                      for (final option in scopes)
+                        RadioListTile<_ExportScope>(
+                          dense: true,
+                          contentPadding: EdgeInsets.zero,
+                          value: option,
+                          title: Text(_exportScopeLabel(option)),
+                          subtitle:
+                              option == _ExportScope.selected &&
+                                  selection.isNotEmpty
+                              ? Text('${selection.length} messages')
+                              : null,
+                        ),
+                    ],
+                  ),
+                ),
+                const Divider(height: 16),
+                Text('Format', style: Theme.of(ctx).textTheme.labelLarge),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  children: [
+                    for (final option in ExportFormat.values)
+                      FilterChip(
+                        label: Text(_exportFormatLabel(option)),
+                        selected: format == option,
+                        onSelected: (_) => setDialog(() => format = option),
+                      ),
+                  ],
+                ),
+                const Divider(height: 16),
+                Text('Include', style: Theme.of(ctx).textTheme.labelLarge),
+                CheckboxListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  value: includeRaw,
+                  title: const Text('Original JSON'),
+                  subtitle: const Text(
+                    'JSON only. Makes the file much larger.',
+                  ),
+                  onChanged: format == ExportFormat.json
+                      ? (v) => setDialog(() => includeRaw = v ?? false)
+                      : null,
+                ),
+                CheckboxListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  value: includeMedia,
+                  title: const Text('Media'),
+                  subtitle: const Text(
+                    'JSON and text. CSV always lists media.',
+                  ),
+                  onChanged: (v) => setDialog(() => includeMedia = v ?? false),
+                ),
+                CheckboxListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  value: includeReactions,
+                  title: const Text('Reactions'),
+                  subtitle: const Text(
+                    'JSON and text. CSV always lists reactions.',
+                  ),
+                  onChanged: (v) =>
+                      setDialog(() => includeReactions = v ?? false),
+                ),
+                CheckboxListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  value: useDisplayNames,
+                  title: const Text('Use display names'),
+                  subtitle: const Text(
+                    'Aliases are used; originals are kept in JSON and CSV.',
+                  ),
+                  onChanged: (v) =>
+                      setDialog(() => useDisplayNames = v ?? false),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(
+                ctx,
+                _ExportRequest(
+                  scope,
+                  format,
+                  ExportOptions(
+                    includeRaw: format == ExportFormat.json && includeRaw,
+                    includeMedia: includeMedia,
+                    includeReactions: includeReactions,
+                    useDisplayNames: useDisplayNames,
+                  ),
+                ),
+              ),
+              child: const Text('Export'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (request != null && mounted) export(request);
+  }
+
+  void handleMenu(Object? value) {
+    if (value is SortMode) {
+      setState(() {
+        sort = value;
+        recompute();
+        if (!_wide) resultsOpen = panelMode && query.isNotEmpty;
+      });
+      return;
+    }
+    if (value is! _ChatMenuAction) return;
+    switch (value) {
+      case _ChatMenuAction.focusSearch:
+        searchFocus.requestFocus();
+      case _ChatMenuAction.panel:
+        setState(() {
+          panelMode = !panelMode;
+          recompute();
+          resultsOpen = panelMode;
+        });
+      case _ChatMenuAction.regex:
+        setState(() {
+          useRegex = !useRegex;
+          recompute();
+        });
+      case _ChatMenuAction.caseSensitive:
+        setState(() {
+          caseSensitive = !caseSensitive;
+          recompute();
+        });
+      case _ChatMenuAction.mediaOnly:
+        setState(() {
+          mediaOnly = !mediaOnly;
+          recompute();
+        });
+      case _ChatMenuAction.clearFilters:
+        _searchTimer?.cancel();
+        setState(() {
+          qc.clear();
+          sender = null;
+          mediaOnly = false;
+          useRegex = false;
+          caseSensitive = false;
+          sort = SortMode.oldest;
+          selecting = false;
+          selection.clear();
+          resultsOpen = false;
+          recompute();
+        });
+      case _ChatMenuAction.peopleFilters:
+        settings.update(
+          () => settings.showPeopleFilters = !settings.showPeopleFilters,
+        );
+      case _ChatMenuAction.savedSearches:
+        showSavedSearches();
+      case _ChatMenuAction.miniMap:
+        settings.update(
+          () => settings.showActivityRail = !settings.showActivityRail,
+        );
+      case _ChatMenuAction.gallery:
+        setState(() => gallery = !gallery);
+      case _ChatMenuAction.mediaInfo:
+        showMediaInfo(context, widget.store, widget.chat);
+      case _ChatMenuAction.jumpToDate:
+        jumpToDate();
+      case _ChatMenuAction.select:
+        setState(() {
+          selecting = !selecting;
+          if (!selecting) selection.clear();
+        });
+      case _ChatMenuAction.export:
+        chooseExport();
+    }
+  }
+
+  TextStyle? get _menuSectionStyle => Theme.of(context).textTheme.labelSmall
+      ?.copyWith(
+        color: Theme.of(context).colorScheme.primary,
+        fontWeight: FontWeight.bold,
+      );
+
+  PopupMenuEntry<Object> _menuSection(String label) => PopupMenuItem<Object>(
+    enabled: false,
+    child: Text(label, style: _menuSectionStyle),
+  );
+
+  // ---------- controls ----------
+
+  MenuStyle _roundedMenuStyle({
+    AlignmentGeometry? alignment,
+    double? maxHeight,
+  }) {
+    final cs = Theme.of(context).colorScheme;
+    return MenuStyle(
+      alignment: alignment,
+      backgroundColor: WidgetStatePropertyAll(cs.surfaceContainerHigh),
+      elevation: const WidgetStatePropertyAll(3),
+      side: WidgetStatePropertyAll(BorderSide(color: cs.outlineVariant)),
+      shape: WidgetStatePropertyAll(
+        RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      ),
+      maximumSize: maxHeight == null
+          ? null
+          : WidgetStatePropertyAll(Size(double.infinity, maxHeight)),
+    );
+  }
+
+  ButtonStyle get _roundedMenuItemStyle => ButtonStyle(
+    shape: WidgetStatePropertyAll(
+      RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+    ),
+  );
+
+  Widget _menuHeader(String label) => Padding(
+    padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+    child: Text(label, style: _menuSectionStyle),
+  );
+
+  Widget _menuAction(
+    IconData icon,
+    String label,
+    VoidCallback run, {
+    String? hint,
+  }) => MenuItemButton(
+    style: _roundedMenuItemStyle,
+    leadingIcon: Icon(icon, size: 20),
+    onPressed: run,
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(label),
+        if (hint != null) ...[
+          const SizedBox(width: 24),
+          Text(hint, style: Theme.of(context).textTheme.bodySmall),
+        ],
+      ],
+    ),
+  );
+
+  Widget materialOverflowMenu() {
+    final cs = Theme.of(context).colorScheme;
+    final active =
+        sort != SortMode.oldest ||
+        mediaOnly ||
+        useRegex ||
+        caseSensitive ||
+        selecting ||
+        gallery;
+    return MenuAnchor(
+      controller: _menuController,
+      alignmentOffset: const Offset(0, 8),
+      style: _roundedMenuStyle(
+        alignment: AlignmentDirectional.bottomEnd,
+        maxHeight: math.max(
+          200.0,
+          math.min(420.0, MediaQuery.sizeOf(context).height - 96),
+        ),
+      ),
+      menuChildren: [
+        _menuHeader('SEARCH'),
+        _menuAction(
+          Icons.search,
+          'Find in chat',
+          () => handleMenu(_ChatMenuAction.focusSearch),
+          hint: _findHint,
+        ),
+        CheckboxMenuButton(
+          style: _roundedMenuItemStyle,
+          value: panelMode,
+          onChanged: (_) => handleMenu(_ChatMenuAction.panel),
+          child: const Text('Separate results panel'),
+        ),
+        CheckboxMenuButton(
+          style: _roundedMenuItemStyle,
+          value: useRegex,
+          onChanged: (_) => handleMenu(_ChatMenuAction.regex),
+          child: const Text('Regular expression'),
+        ),
+        CheckboxMenuButton(
+          style: _roundedMenuItemStyle,
+          value: caseSensitive,
+          onChanged: (_) => handleMenu(_ChatMenuAction.caseSensitive),
+          child: const Text('Case-sensitive (Aa)'),
+        ),
+        CheckboxMenuButton(
+          style: _roundedMenuItemStyle,
+          value: mediaOnly,
+          onChanged: (_) => handleMenu(_ChatMenuAction.mediaOnly),
+          child: const Text('Media only'),
+        ),
+        CheckboxMenuButton(
+          style: _roundedMenuItemStyle,
+          value: settings.showPeopleFilters,
+          onChanged: (_) => handleMenu(_ChatMenuAction.peopleFilters),
+          child: const Text('People filters'),
+        ),
+        if (hasActiveFilters)
+          _menuAction(
+            Icons.filter_alt_off_outlined,
+            'Clear filters',
+            () => handleMenu(_ChatMenuAction.clearFilters),
+          ),
+        _menuAction(
+          Icons.bookmarks_outlined,
+          'Saved searches…',
+          () => handleMenu(_ChatMenuAction.savedSearches),
+        ),
+        _menuHeader('VIEW'),
+        _menuAction(
+          gallery ? Icons.chat : Icons.photo_library_outlined,
+          gallery ? 'Back to messages' : 'Gallery',
+          () => handleMenu(_ChatMenuAction.gallery),
+        ),
+        _menuAction(
+          Icons.perm_media_outlined,
+          'Media info and folders',
+          () => handleMenu(_ChatMenuAction.mediaInfo),
+        ),
+        CheckboxMenuButton(
+          style: _roundedMenuItemStyle,
+          value: settings.showActivityRail,
+          onChanged: (_) => handleMenu(_ChatMenuAction.miniMap),
+          child: const Text('Activity rail'),
+        ),
+        _menuAction(
+          Icons.event_available_outlined,
+          'Jump to a date',
+          () => handleMenu(_ChatMenuAction.jumpToDate),
+        ),
+        _menuHeader('SORT'),
+        for (final v in SortMode.values)
+          RadioMenuButton<SortMode>(
+            style: _roundedMenuItemStyle,
+            value: v,
+            groupValue: sort,
+            onChanged: (value) {
+              if (value != null) handleMenu(value);
+            },
+            child: Text(v.label),
+          ),
+        _menuHeader('ACTIONS'),
+        _menuAction(
+          selecting ? Icons.checklist : Icons.checklist_outlined,
+          selecting ? 'Finish selecting' : 'Select messages',
+          () => handleMenu(_ChatMenuAction.select),
+        ),
+        _menuAction(
+          Icons.file_download_outlined,
+          'Export…',
+          () => handleMenu(_ChatMenuAction.export),
+        ),
+      ],
+      child: IconButton(
+        tooltip: 'Search, view, sort and export',
+        icon: Icon(Icons.more_vert, color: active ? cs.primary : null),
+        onPressed: () {
+          if (_menuController.isOpen) {
+            _menuController.close();
+          } else {
+            _menuController.open();
+          }
+        },
+      ),
+    );
+  }
+
+  List<Widget> activeFilterChips(SearchPreset? activePreset) {
+    final chips = <Widget>[];
+    void add(Widget chip) => chips.add(chip);
+
+    if (sender != null) {
+      add(
+        Tooltip(
+          message: displayName(sender!),
+          child: InputChip(
+            avatar: _personAvatar(sender!),
+            label: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 140),
+              child: Text(
+                displayName(sender!),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            onDeleted: () => setState(() {
+              sender = null;
+              recompute();
+            }),
+          ),
+        ),
+      );
+    }
+    if (mediaOnly) {
+      add(
+        FilterChip(
+          avatar: const Icon(Icons.image_outlined, size: 16),
+          label: const Text('Media'),
+          selected: true,
+          onSelected: (_) => handleMenu(_ChatMenuAction.mediaOnly),
+        ),
+      );
+    }
+    if (useRegex) {
+      add(
+        FilterChip(
+          label: const Text('Regex'),
+          selected: true,
+          onSelected: (_) => handleMenu(_ChatMenuAction.regex),
+        ),
+      );
+    }
+    if (caseSensitive) {
+      add(
+        FilterChip(
+          label: const Text('Aa'),
+          selected: true,
+          onSelected: (_) => handleMenu(_ChatMenuAction.caseSensitive),
+        ),
+      );
+    }
+    if (sort != SortMode.oldest) {
+      add(
+        InputChip(
+          avatar: const Icon(Icons.sort, size: 16),
+          label: Text(sort.label),
+          onDeleted: () => handleMenu(SortMode.oldest),
+        ),
+      );
+    }
+    if (activePreset != null) {
+      add(
+        InputChip(
+          avatar: const Icon(Icons.bookmark, size: 16),
+          label: Text(activePreset.name),
+          onPressed: () => showSavedSearches(),
+        ),
+      );
+    }
+    if (hasActiveFilters) {
+      add(
+        ActionChip(
+          avatar: const Icon(Icons.filter_alt_off_outlined, size: 16),
+          label: const Text('Clear'),
+          onPressed: () => handleMenu(_ChatMenuAction.clearFilters),
+        ),
+      );
+    }
+    if (selecting) {
+      add(
+        Text(
+          selection.isEmpty
+              ? 'Tap messages to select'
+              : '${selection.length} selected',
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+      );
+    }
+    return chips;
+  }
+
+  Widget _personAvatar(String value, {IconData? fallback}) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final name = value.isEmpty ? '' : displayName(value);
+    return CircleAvatar(
+      radius: 12,
+      backgroundColor: cs.primaryContainer,
+      foregroundColor: cs.onPrimaryContainer,
+      child: fallback != null
+          ? Icon(fallback, size: 14)
+          : Text(
+              name.isEmpty ? '?' : name[0].toUpperCase(),
+              style: theme.textTheme.labelSmall,
+            ),
+    );
+  }
+
+  Widget _personFieldLabel(IconData icon, String label) {
+    final theme = Theme.of(context);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 14, color: theme.colorScheme.primary),
+        const SizedBox(width: 6),
+        Text(
+          label.toUpperCase(),
+          style: theme.textTheme.labelSmall?.copyWith(
+            color: theme.colorScheme.primary,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0.8,
+          ),
+        ),
+      ],
+    );
+  }
+
+  List<DropdownMenuEntry<String>> senderMenuEntries(List<String> senders) => [
+    DropdownMenuEntry<String>(
+      value: '',
+      label: 'Everyone',
+      leadingIcon: _personAvatar('', fallback: Icons.groups_outlined),
+    ),
+    for (final n in senders)
+      DropdownMenuEntry<String>(
+        value: n,
+        label: displayName(n),
+        leadingIcon: _personAvatar(n),
+      ),
+  ];
+
+  List<DropdownMenuEntry<String>> meMenuEntries(List<String> senders) => [
+    DropdownMenuEntry<String>(
+      value: '',
+      label: '(not set)',
+      leadingIcon: _personAvatar('', fallback: Icons.person_off_outlined),
+    ),
+    for (final n in senders)
+      DropdownMenuEntry<String>(
+        value: n,
+        label: displayName(n),
+        leadingIcon: _personAvatar(n),
+      ),
+  ];
+
+  Widget _materialPersonField({
+    required String fieldKey,
+    required String label,
+    required IconData icon,
+    required String value,
+    required String initialValue,
+    required bool searchable,
+    required List<DropdownMenuEntry<String>> entries,
+    required ValueChanged<String?> onSelected,
+  }) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    return Tooltip(
+      message: value,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _personFieldLabel(icon, label),
+          const SizedBox(height: 6),
+          DropdownMenu<String>(
+            key: ValueKey(fieldKey),
+            initialSelection: initialValue,
+            expandedInsets: EdgeInsets.zero,
+            menuHeight: 320,
+            menuStyle: _roundedMenuStyle(),
+            enableSearch: searchable,
+            maxLines: 1,
+            textStyle: theme.textTheme.bodyMedium,
+            leadingIcon: Icon(icon, size: 18, color: cs.onSurfaceVariant),
+            trailingIcon: const Icon(Icons.keyboard_arrow_down, size: 20),
+            selectedTrailingIcon: const Icon(Icons.keyboard_arrow_up, size: 20),
+            dropdownMenuEntries: entries,
+            onSelected: onSelected,
+            // Use the theme's InputDecorationTheme so M3 and Classic stay in sync.
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _classicPersonItem(String value, String label, {IconData? fallback}) =>
+      Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _personAvatar(value, fallback: fallback),
+          const SizedBox(width: 10),
+          Expanded(child: Text(label, overflow: TextOverflow.ellipsis)),
+        ],
+      );
+
+  Widget _classicPersonField<T>({
+    required String label,
+    required IconData icon,
+    required String value,
+    required T? initialValue,
+    required List<DropdownMenuItem<T>> items,
+    required ValueChanged<T?> onChanged,
+  }) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    return Tooltip(
+      message: value,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _personFieldLabel(icon, label),
+          const SizedBox(height: 6),
+          Container(
+            decoration: BoxDecoration(
+              color: theme.useMaterial3 ? cs.surfaceContainerLow : cs.surface,
+              borderRadius: BorderRadius.circular(theme.useMaterial3 ? 12 : 4),
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+            child: DropdownButton<T>(
+              value: initialValue,
+              isExpanded: true,
+              underline: const SizedBox.shrink(),
+              style: theme.textTheme.bodyMedium,
+              items: items,
+              onChanged: onChanged,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _peopleFilterToggle() {
+    final shown = settings.showPeopleFilters;
+    void toggle() => settings.update(
+      () => settings.showPeopleFilters = !settings.showPeopleFilters,
+    );
+    return IconButton(
+      tooltip: shown ? 'Hide people filters' : 'Show people filters',
+      isSelected: !shown,
+      visualDensity: VisualDensity.compact,
+      constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+      padding: EdgeInsets.zero,
+      icon: const Icon(Icons.visibility_off_outlined, size: 18),
+      selectedIcon: const Icon(Icons.visibility_outlined, size: 18),
+      onPressed: toggle,
+    );
+  }
+
+  Widget _filterFooter(SearchPreset? activePreset, bool panelVisible) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 4,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          _peopleFilterToggle(),
+          ...activeFilterChips(activePreset),
+          if (panelVisible && !_wide && !resultsOpen)
+            ActionChip(
+              avatar: const Icon(Icons.list, size: 18),
+              label: Text('Show ${results.length} results'),
+              onPressed: () => setState(() => resultsOpen = true),
+            )
+          else
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: Text(
+                panelVisible
+                    ? '${results.length} matches in ${view.length}'
+                    : '${view.length} shown',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _filterBarFrame({
+    required List<Widget> fields,
+    required Widget footer,
+  }) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final stacked = constraints.maxWidth < 520;
+        final fieldWidth = stacked
+            ? constraints.maxWidth
+            : (constraints.maxWidth - 8) / 2;
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(8, 6, 8, 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final field in fields)
+                    SizedBox(width: fieldWidth, child: field),
+                ],
+              ),
+              footer,
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget materialFilterBar(
+    List<String> senders,
+    Store s,
+    SearchPreset? activePreset,
+    bool panelVisible,
+  ) {
+    final fromValue = sender == null ? 'Everyone' : displayName(sender!);
+    final meSelection = senders.contains(s.me) ? s.me : '';
+    final meValue = meSelection.isEmpty
+        ? '(not set)'
+        : displayName(meSelection);
+    return _filterBarFrame(
+      fields: [
+        _materialPersonField(
+          fieldKey: 'from-${sender ?? ''}-${senders.join('|')}',
+          label: 'Show messages from',
+          icon: Icons.person_search_outlined,
+          value: fromValue,
+          initialValue: sender ?? '',
+          searchable: senders.length > 12,
+          entries: senderMenuEntries(senders),
+          onSelected: (v) => setState(() {
+            sender = (v == null || v.isEmpty) ? null : v;
+            recompute();
+          }),
+        ),
+        _materialPersonField(
+          fieldKey: 'me-${s.me}-${senders.join('|')}',
+          label: 'I am',
+          icon: Icons.person_outline,
+          value: meValue,
+          initialValue: meSelection,
+          searchable: senders.length > 12,
+          entries: meMenuEntries(senders),
+          onSelected: (v) => s.setMe(v ?? ''),
+        ),
+      ],
+      footer: _filterFooter(activePreset, panelVisible),
+    );
+  }
+
+  Widget legacyFilterBar(
+    List<String> senders,
+    Store s,
+    SearchPreset? activePreset,
+    bool panelVisible,
+  ) {
+    final meSelection = senders.contains(s.me) ? s.me : '';
+    final meValue = meSelection.isEmpty
+        ? '(not set)'
+        : displayName(meSelection);
+    return _filterBarFrame(
+      fields: [
+        _classicPersonField<String?>(
+          label: 'Show messages from',
+          icon: Icons.person_search_outlined,
+          value: sender == null ? 'Everyone' : displayName(sender!),
+          initialValue: sender,
+          items: [
+            DropdownMenuItem<String?>(
+              value: null,
+              child: _classicPersonItem(
+                '',
+                'Everyone',
+                fallback: Icons.groups_outlined,
+              ),
+            ),
+            for (final n in senders)
+              DropdownMenuItem<String?>(
+                value: n,
+                child: _classicPersonItem(n, displayName(n)),
+              ),
+          ],
+          onChanged: (v) => setState(() {
+            sender = v;
+            recompute();
+          }),
+        ),
+        _classicPersonField<String>(
+          label: 'I am',
+          icon: Icons.person_outline,
+          value: meValue,
+          initialValue: meSelection,
+          items: [
+            DropdownMenuItem<String>(
+              value: '',
+              child: _classicPersonItem(
+                '',
+                '(not set)',
+                fallback: Icons.person_off_outlined,
+              ),
+            ),
+            for (final n in senders)
+              DropdownMenuItem<String>(
+                value: n,
+                child: _classicPersonItem(n, displayName(n)),
+              ),
+          ],
+          onChanged: (v) => s.setMe(v ?? ''),
+        ),
+      ],
+      footer: _filterFooter(activePreset, panelVisible),
+    );
+  }
+
+  // ---------- saved searches ----------
+
+  bool presetMatches(SearchPreset p) =>
+      p.query == query &&
+      (p.sender.isEmpty ? sender == null : p.sender == sender) &&
+      p.mediaOnly == mediaOnly &&
+      p.regex == useRegex &&
+      p.caseSensitive == caseSensitive &&
+      p.sort == sort.name;
+
+  SearchPreset currentPreset(String name) => SearchPreset(
+    name: name,
+    query: query,
+    sender: sender ?? '',
+    mediaOnly: mediaOnly,
+    regex: useRegex,
+    caseSensitive: caseSensitive,
+    sort: sort.name,
+  );
+
+  void applyPreset(SearchPreset p) {
+    _searchTimer?.cancel();
+    setState(() {
+      qc.text = p.query;
+      sender = p.sender.isEmpty || !widget.chat.participants.contains(p.sender)
+          ? null
+          : p.sender;
+      mediaOnly = p.mediaOnly;
+      useRegex = p.regex;
+      caseSensitive = p.caseSensitive;
+      sort = SortMode.values.firstWhere(
+        (s) => s.name == p.sort,
+        orElse: () => SortMode.oldest,
+      );
+      resultsOpen = false;
+      recompute();
+      if (panelMode) resultsOpen = query.isNotEmpty;
+    });
+  }
+
+  Future<void> showSavedSearches() async {
+    final name = TextEditingController();
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialog) => AlertDialog(
+          title: const Text('Saved searches'),
+          content: SizedBox(
+            width: math.min(520.0, MediaQuery.sizeOf(ctx).width - 48),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: name,
+                  decoration: const InputDecoration(
+                    labelText: 'Name for the current search',
+                    hintText: 'e.g. photos from Ana',
+                    isDense: true,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: FilledButton.icon(
+                    icon: const Icon(Icons.bookmark_add_outlined, size: 18),
+                    label: const Text('Save current filters'),
+                    onPressed: () {
+                      final n = name.text.trim();
+                      if (n.isEmpty) return;
+                      settings.savePreset(currentPreset(n));
+                      name.clear();
+                      setDialog(() {});
+                    },
+                  ),
+                ),
+                const SizedBox(height: 12),
+                if (settings.presets.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 16),
+                    child: Text('No saved searches yet.'),
+                  )
+                else
+                  Flexible(
+                    child: ListView.builder(
+                      shrinkWrap: true,
+                      itemCount: settings.presets.length,
+                      itemBuilder: (context, i) {
+                        final p = settings.presets[i];
+                        return ListTile(
+                          dense: true,
+                          title: Text(p.name),
+                          subtitle: Text(
+                            p.summary,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          onTap: () {
+                            Navigator.pop(ctx);
+                            applyPreset(p);
+                          },
+                          trailing: IconButton(
+                            tooltip: 'Delete ${p.name}',
+                            icon: const Icon(Icons.delete_outline, size: 18),
+                            onPressed: () {
+                              settings.deletePreset(p.name);
+                              setDialog(() {});
+                            },
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Close'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ---------- activity rail ----------
+
+  String _monthKey(int t) {
+    final d = DateTime.fromMillisecondsSinceEpoch(t);
+    return '${d.year.toString().padLeft(4, '0')}-${two(d.month)}';
+  }
+
+  Map<String, int> _monthIndexForView() {
+    if (_monthSig == _viewSig && _monthIndex.isNotEmpty) {
+      return _monthIndex;
+    }
+    final index = <String, int>{};
+    for (var i = 0; i < view.length; i++) {
+      final t = view[i].t;
+      if (t == null) continue;
+      index.putIfAbsent(_monthKey(t), () => i);
+    }
+    _monthIndex = index;
+    _monthSig = _viewSig;
+    return _monthIndex;
+  }
+
+  List<ActivityBucket> _activityBuckets() {
+    final messages = widget.chat.messages;
+    final sig =
+        '${widget.chat.key}|${messages.length}|${messages.firstOrNull?.t}|${messages.lastOrNull?.t}';
+    if (_activitySig == sig && _activity.isNotEmpty) return _activity;
+    final builders = <String, _BucketBuilder>{};
+    for (final m in messages) {
+      final t = m.t;
+      if (t == null) continue;
+      final key = _monthKey(t);
+      final d = DateTime.fromMillisecondsSinceEpoch(t);
+      final b = builders.putIfAbsent(
+        key,
+        () => _BucketBuilder(
+          DateTime(d.year, d.month).millisecondsSinceEpoch,
+          key,
+        ),
+      );
+      b.count++;
+    }
+    final buckets =
+        builders.values
+            .map((b) => ActivityBucket(b.t, b.count, b.label))
+            .toList()
+          ..sort((a, b) => a.t.compareTo(b.t));
+    _activity = buckets;
+    _activitySig = sig;
+    return _activity;
+  }
+
+  void _scrubRail(double dy, double height, List<ActivityBucket> buckets) {
+    if (height <= 0 || buckets.isEmpty) return;
+    final i = (dy / height * buckets.length)
+        .clamp(0, buckets.length - 1)
+        .toInt();
+    if (i == _railBucket) return;
+    _railBucket = i;
+    final label = buckets[i].label;
+    final idx = _monthIndexForView()[label];
+    if (idx != null && idx >= 0) {
+      jumpToMessage(idx);
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'No visible messages from $label. Clear filters to jump there.',
+          ),
+        ),
+      );
+    }
+  }
+
+  Widget activityRail() {
+    final buckets = _activityBuckets();
+    if (buckets.isEmpty) return const SizedBox.shrink();
+    final max = buckets.map((b) => b.count).reduce(math.max);
+    return Container(
+      width: 26,
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      decoration: BoxDecoration(
+        border: Border(right: Divider.createBorderSide(context, width: 1)),
+      ),
+      child: LayoutBuilder(
+        builder: (context, box) {
+          final slot = math.max(2.0, box.maxHeight / buckets.length);
+          final cs = Theme.of(context).colorScheme;
+          final m3 = Theme.of(context).useMaterial3;
+          final activeColor = m3 ? cs.primaryContainer : cs.primary;
+          final idleColor = m3
+              ? cs.primaryContainer.withValues(alpha: 0.45)
+              : cs.primary.withValues(alpha: 0.25);
+          return GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTapDown: (d) =>
+                _scrubRail(d.localPosition.dy, box.maxHeight, buckets),
+            onPanStart: (d) =>
+                _scrubRail(d.localPosition.dy, box.maxHeight, buckets),
+            onPanUpdate: (d) =>
+                _scrubRail(d.localPosition.dy, box.maxHeight, buckets),
+            child: Column(
+              children: [
+                for (var i = 0; i < buckets.length; i++)
+                  Expanded(
+                    child: Align(
+                      alignment: Alignment.bottomCenter,
+                      child: Tooltip(
+                        message:
+                            '${buckets[i].label} · ${buckets[i].count} message${buckets[i].count == 1 ? '' : 's'}',
+                        child: Container(
+                          width: 14,
+                          height: math.max(
+                            1.0,
+                            (slot - 2) * buckets[i].count / max,
+                          ),
+                          decoration: BoxDecoration(
+                            color: i == _railBucket ? activeColor : idleColor,
+                            borderRadius: BorderRadius.circular(2),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  // ---------- jumping around ----------
+
+  /// Scroll the conversation to message [idx] (an index into [view]) and flash it.
+  void jumpToMessage(int idx) {
+    setState(() {
+      gallery = false;
+      if (!_wide) resultsOpen = false;
+      highlight = idx;
+    });
+    _hlTimer?.cancel();
+    _hlTimer = Timer(const Duration(seconds: 3), () {
+      if (mounted) setState(() => highlight = null);
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !scroll.isAttached || view.isEmpty) return;
+      scroll.jumpTo(
+        index: _reversed ? view.length - 1 - idx : idx,
+        alignment: 0.35,
+      );
+    });
+  }
+
+  /// Show every message that replied to this one, then jump to the chosen one.
+  Future<void> showReplies(Msg original) async {
+    final replies = widget.store.repliesTo(original);
+    if (replies.isEmpty) return;
+    final chosen = await showDialog<Msg>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(
+          '${replies.length} repl${replies.length == 1 ? 'y' : 'ies'}',
+        ),
+        content: SizedBox(
+          width: math.min(500.0, MediaQuery.sizeOf(ctx).width - 48),
+          child: ListView.builder(
+            shrinkWrap: true,
+            itemCount: replies.length,
+            itemBuilder: (context, i) {
+              final r = replies[i];
+              return ListTile(
+                dense: true,
+                title: Text(
+                  '${displayName(r.sender)}: ${r.text.isEmpty ? '[media]' : r.text}',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                subtitle: Text('${fmtDate(r.t)} ${fmtTime(r.t)}'),
+                onTap: () => Navigator.pop(ctx, r),
+              );
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+    if (chosen == null || !mounted) return;
+    final idx = view.indexOf(chosen);
+    if (idx < 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'That reply is hidden by the current search or filters.',
+          ),
+        ),
+      );
+      return;
+    }
+    jumpToMessage(idx);
+  }
+
+  /// Tap on a quoted reply: go to the original message.
+  void openReply(Msg target) {
+    final idx = view.indexOf(target);
+    if (idx < 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'The original message is hidden by the current search or filters.',
+          ),
+        ),
+      );
+      return;
+    }
+    jumpToMessage(idx);
+  }
+
+  // ---------- build ----------
+
+  @override
+  Widget build(BuildContext context) {
+    final s = widget.store;
+    final senders = widget.chat.participants.toList()..sort();
+    SearchPreset? activePreset;
+    for (final p in settings.presets) {
+      if (presetMatches(p)) {
+        activePreset = p;
+        break;
+      }
+    }
+
+    if (_pendingJump != null && !_jumpScheduled) {
+      _jumpScheduled = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _jumpScheduled = false;
+        final i = _pendingJump;
+        _pendingJump = null;
+        if (i != null && i >= 0 && mounted) jumpToMessage(i);
+      });
+    }
+
+    final panelToggle = IconButton(
+      tooltip: panelMode
+          ? 'Results panel: ON — click to filter the chat in place instead'
+          : 'Results panel: OFF — click to list matches separately',
+      isSelected: panelMode,
+      icon: const Icon(Icons.manage_search_outlined),
+      selectedIcon: const Icon(Icons.manage_search),
+      onPressed: () => handleMenu(_ChatMenuAction.panel),
+    );
+
+    final legacyMoreMenu = PopupMenuButton<Object>(
+      tooltip: 'Search, view, sort and export',
+      icon: Icon(
+        Icons.more_vert,
+        color:
+            (sort != SortMode.oldest ||
+                mediaOnly ||
+                useRegex ||
+                caseSensitive ||
+                selecting ||
+                gallery)
+            ? Theme.of(context).colorScheme.primary
+            : null,
+      ),
+      onSelected: handleMenu,
+      itemBuilder: (_) => [
+        _menuSection('SEARCH'),
+        PopupMenuItem<Object>(
+          value: _ChatMenuAction.focusSearch,
+          child: Row(
+            children: [
+              const Icon(Icons.search, size: 18),
+              const SizedBox(width: 12),
+              const Expanded(child: Text('Find in chat')),
+              Text(_findHint, style: Theme.of(context).textTheme.bodySmall),
+            ],
+          ),
+        ),
+        CheckedPopupMenuItem<Object>(
+          value: _ChatMenuAction.panel,
+          checked: panelMode,
+          child: const Text('Separate results panel'),
+        ),
+        CheckedPopupMenuItem<Object>(
+          value: _ChatMenuAction.regex,
+          checked: useRegex,
+          child: const Text('Regular expression'),
+        ),
+        CheckedPopupMenuItem<Object>(
+          value: _ChatMenuAction.caseSensitive,
+          checked: caseSensitive,
+          child: const Text('Case-sensitive (Aa)'),
+        ),
+        CheckedPopupMenuItem<Object>(
+          value: _ChatMenuAction.mediaOnly,
+          checked: mediaOnly,
+          child: const Text('Media only'),
+        ),
+        CheckedPopupMenuItem<Object>(
+          value: _ChatMenuAction.peopleFilters,
+          checked: settings.showPeopleFilters,
+          child: const Text('People filters'),
+        ),
+        if (hasActiveFilters)
+          const PopupMenuItem<Object>(
+            value: _ChatMenuAction.clearFilters,
+            child: Row(
+              children: [
+                Icon(Icons.filter_alt_off_outlined, size: 18),
+                SizedBox(width: 12),
+                Text('Clear filters'),
+              ],
+            ),
+          ),
+        const PopupMenuItem<Object>(
+          value: _ChatMenuAction.savedSearches,
+          child: Row(
+            children: [
+              Icon(Icons.bookmarks_outlined, size: 18),
+              SizedBox(width: 12),
+              Text('Saved searches…'),
+            ],
+          ),
+        ),
+        _menuSection('VIEW'),
+        PopupMenuItem<Object>(
+          value: _ChatMenuAction.gallery,
+          child: Row(
+            children: [
+              Icon(gallery ? Icons.chat : Icons.photo_library, size: 18),
+              const SizedBox(width: 12),
+              Text(gallery ? 'Back to messages' : 'Gallery'),
+            ],
+          ),
+        ),
+        const PopupMenuItem<Object>(
+          value: _ChatMenuAction.mediaInfo,
+          child: Row(
+            children: [
+              Icon(Icons.perm_media, size: 18),
+              SizedBox(width: 12),
+              Text('Media info and folders'),
+            ],
+          ),
+        ),
+        CheckedPopupMenuItem<Object>(
+          value: _ChatMenuAction.miniMap,
+          checked: settings.showActivityRail,
+          child: const Text('Activity rail'),
+        ),
+        const PopupMenuItem<Object>(
+          value: _ChatMenuAction.jumpToDate,
+          child: Row(
+            children: [
+              Icon(Icons.event_available_outlined, size: 18),
+              SizedBox(width: 12),
+              Text('Jump to a date'),
+            ],
+          ),
+        ),
+        _menuSection('SORT'),
+        for (final v in SortMode.values)
+          CheckedPopupMenuItem<Object>(
+            value: v,
+            checked: sort == v,
+            child: Text(v.label),
+          ),
+        _menuSection('ACTIONS'),
+        PopupMenuItem<Object>(
+          value: _ChatMenuAction.select,
+          child: Row(
+            children: [
+              Icon(
+                selecting ? Icons.checklist : Icons.checklist_outlined,
+                size: 18,
+              ),
+              const SizedBox(width: 12),
+              Text(selecting ? 'Finish selecting' : 'Select messages'),
+            ],
+          ),
+        ),
+        const PopupMenuItem<Object>(
+          value: _ChatMenuAction.export,
+          child: Row(
+            children: [
+              Icon(Icons.file_download_outlined, size: 18),
+              SizedBox(width: 12),
+              Text('Export…'),
+            ],
+          ),
+        ),
+      ],
+    );
+    final overflowMenu = settings.material3
+        ? materialOverflowMenu()
+        : legacyMoreMenu;
+
+    return LayoutBuilder(
+      builder: (context, box) {
+        _wide = box.maxWidth >= 900;
+        final panelVisible = panelMode && query.isNotEmpty;
+        final panelSide = panelVisible && _wide;
+        final panelFull = panelVisible && !_wide && resultsOpen;
+        final Widget body = gallery
+            ? galleryView()
+            : (panelFull ? resultsPanel() : listView());
+
+        return CallbackShortcuts(
+          bindings: {
+            const SingleActivator(LogicalKeyboardKey.keyF, control: true): () =>
+                searchFocus.requestFocus(),
+          },
+          child: Focus(
+            autofocus: true,
+            child: Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+                  child: _searchToolbar(panelToggle, overflowMenu),
+                ),
+                if (settings.showPeopleFilters)
+                  settings.material3
+                      ? materialFilterBar(
+                          senders,
+                          s,
+                          activePreset,
+                          panelVisible,
+                        )
+                      : legacyFilterBar(senders, s, activePreset, panelVisible)
+                else
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+                    child: _filterFooter(activePreset, panelVisible),
+                  ),
+                const Divider(height: 1),
+                Expanded(
+                  // The same Row is always used, so the message list is never torn down just
+                  // because the results panel appears next to it.
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (settings.showActivityRail &&
+                          !gallery &&
+                          view.isNotEmpty)
+                        activityRail(),
+                      Expanded(child: body),
+                      if (panelSide) ...[
+                        const VerticalDivider(width: 1),
+                        SizedBox(width: 360, child: resultsPanel()),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  // ---------- search results panel ----------
+
+  Widget resultsPanel() {
+    final q = query;
+    final compact = settings.resultsLayout == ResultsLayout.compact;
+    final newestFirst = settings.resultsNewestFirst;
+    final order = [...results];
+    // `results` follows the order of the chat; flip it so it matches "newest first / oldest first"
+    if (dateSort && ((sort == SortMode.oldest) == newestFirst)) {
+      for (var i = 0, j = order.length - 1; i < j; i++, j--) {
+        final tmp = order[i];
+        order[i] = order[j];
+        order[j] = tmp;
+      }
+    }
+    final muted = Theme.of(context).colorScheme.outline;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(10, 4, 4, 4),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  '${results.length} result${results.length == 1 ? '' : 's'} for "$q"',
+                  style: Theme.of(context).textTheme.titleSmall,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              if (dateSort)
+                IconButton(
+                  tooltip: newestFirst
+                      ? 'Newest matches first (click to flip)'
+                      : 'Oldest matches first (click to flip)',
+                  icon: Icon(
+                    newestFirst ? Icons.arrow_downward : Icons.arrow_upward,
+                  ),
+                  onPressed: () => settings.update(
+                    () => settings.resultsNewestFirst = !newestFirst,
+                  ),
+                ),
+              IconButton(
+                tooltip: compact
+                    ? 'Showing one line per result (click for detailed)'
+                    : 'Showing detailed results (click for compact)',
+                icon: Icon(
+                  compact ? Icons.view_headline : Icons.view_agenda_outlined,
+                ),
+                onPressed: () => settings.update(
+                  () => settings.resultsLayout = compact
+                      ? ResultsLayout.detailed
+                      : ResultsLayout.compact,
+                ),
+              ),
+            ],
+          ),
+        ),
+        const Divider(height: 1),
+        Expanded(
+          child: order.isEmpty
+              ? const Center(child: Text('No matches'))
+              : ListView.builder(
+                  itemCount: order.length,
+                  itemBuilder: (context, i) {
+                    final idx = order[i];
+                    final m = view[idx];
+                    final when = '${fmtDate(m.t)} ${fmtTime(m.t)}';
+                    if (compact) {
+                      return ListTile(
+                        dense: true,
+                        visualDensity: VisualDensity.compact,
+                        selected: highlight == idx,
+                        title: Text.rich(
+                          TextSpan(
+                            children: [
+                              TextSpan(
+                                text: '$when  ${displayName(m.sender)}: ',
+                                style: TextStyle(color: muted, fontSize: 12),
+                              ),
+                              ...highlightSpans(
+                                snippet(m.text, q).replaceAll('\n', ' '),
+                                q,
+                                null,
+                                kHighlightColor,
+                              ),
+                            ],
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        onTap: () => jumpToMessage(idx),
+                      );
+                    }
+                    return ListTile(
+                      dense: true,
+                      selected: highlight == idx,
+                      title: Text.rich(
+                        TextSpan(
+                          children: highlightSpans(
+                            snippet(m.text, q),
+                            q,
+                            null,
+                            kHighlightColor,
+                          ),
+                        ),
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      subtitle: Text('${displayName(m.sender)} · $when'),
+                      onTap: () => jumpToMessage(idx),
+                    );
+                  },
+                ),
+        ),
+      ],
+    );
+  }
+
+  // ---------- messages ----------
+
+  Widget listView() {
+    if (view.isEmpty) return const Center(child: Text('No messages match.'));
+    final rev = _reversed;
+    final n = view.length;
+    final initial = rev ? 0 : (_restoreIndex ?? 0);
+    return ScrollablePositionedList.builder(
+      key: ValueKey('$_listGen-$rev'),
+      itemScrollController: scroll,
+      itemPositionsListener: positions,
+      reverse: rev,
+      initialScrollIndex: initial,
+      padding: const EdgeInsets.all(8),
+      itemCount: n,
+      itemBuilder: (context, i) {
+        final idx = rev ? n - 1 - i : i;
+        final m = view[idx];
+        final prev = idx > 0 ? view[idx - 1] : null;
+        final newDay = dateSort && (prev == null || !sameDay(prev.t, m.t));
+        final showName =
+            !dateSort || prev == null || prev.sender != m.sender || newDay;
+        final mine = widget.store.me.isNotEmpty && m.sender == widget.store.me;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (newDay)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                child: Center(
+                  child: Text(
+                    fmtDate(m.t),
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
+              ),
+            Bubble(
+              m: m,
+              mine: mine,
+              showName: showName,
+              showDate: !dateSort,
+              store: widget.store,
+              chat: widget.chat,
+              query: query,
+              highlighted: highlight == idx,
+              bookmarked: widget.store.isBookmarked(widget.chat, m),
+              onToggleBookmark: () =>
+                  widget.store.toggleBookmark(widget.chat, m),
+              selected: selection.contains(m),
+              onSelect: selecting ? () => toggleSelect(m) : null,
+              replyCount: widget.store.replyCount(m),
+              onShowReplies: () => showReplies(m),
+              onPic: openPicByPath,
+              onOpenReply: openReply,
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget galleryView() {
+    final pics = getPics();
+    if (pics.isEmpty) {
+      return Center(
+        child: Text(
+          widget.store.hasMedia(widget.chat)
+              ? 'No photos match the current filters.'
+              : 'Open a media folder first (media info button above).',
+        ),
+      );
+    }
+    final tile = settings.galleryTileSize;
+    return GridView.builder(
+      padding: const EdgeInsets.all(4),
+      gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
+        maxCrossAxisExtent: tile,
+        mainAxisSpacing: 4,
+        crossAxisSpacing: 4,
+      ),
+      itemCount: pics.length,
+      itemBuilder: (context, i) => MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(
+          onTap: () => openPager(pics, i),
+          child: Image.file(
+            File(pics[i].path),
+            fit: BoxFit.cover,
+            cacheWidth: (tile * 2).round(), // decode small: light on memory
+            filterQuality: FilterQuality.low,
+            gaplessPlayback: true,
+            errorBuilder: (_, _, _) => const Icon(Icons.broken_image),
+          ),
+        ),
+      ),
+    );
+  }
+}
