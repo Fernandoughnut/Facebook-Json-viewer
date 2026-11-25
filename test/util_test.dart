@@ -62,6 +62,14 @@ void main() {
     expect(nextMatchPosition(0, const <int>[], 1), -1);
   });
 
+  test('sameMinute groups wall-clock minutes, not fixed 60-second windows', () {
+    final base = DateTime(2026, 11, 26, 13, 59, 50).millisecondsSinceEpoch;
+    expect(sameMinute(base, base + 9000), isTrue);
+    expect(sameMinute(base, base + 11000), isFalse);
+    expect(sameMinute(null, null), isTrue);
+    expect(sameMinute(base, null), isFalse);
+  });
+
   test('formatCount groups thousands', () {
     expect(formatCount(1), '1');
     expect(formatCount(999), '999');

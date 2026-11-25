@@ -19,17 +19,18 @@ Built with Flutter. Linux works today; Android builds should work with the file-
 - Sort messages by date (either direction), sender, longest messages, most reactions, messages with media, or **grouped threads**.
 - **Jump to date** picks a day and scrolls straight to it.
 - Replies: a message that replies to another shows a quoted block ("Replying to …"); click it to jump to the original. A bookmark-shaped reply icon also shows **all replies to a message** and lets you jump to one.
-- "Message details": right-click a message (or click its time) to see the original JSON, reply info, and its note. A copy button on each message, and **Copy text** in Message details, copy just the message text.
+- "Message details": right-click a message on Linux, long-press it on Android, or click its time to see the original JSON, reply info, and its note. A copy button on each message, and **Copy text** in Message details, copy just the message text.
 - **Conversation context menu**: right-click (or long-press) a conversation to archive/unarchive it, see details, copy its name or participant names, clear its reading position, or remove it from the app. Archived chats can be shown from the sidebar toolbar; removed chats are skipped on future imports, and the original JSON file is never deleted.
 - Optional bookmarks and notes per message. Notes are searchable from the **Tools → Saved** tab.
 - A floating date pill at the top of the message list follows your scroll position and shows the date of the messages in the middle of the view. Turn it off in Settings → Search results panel if you prefer a clean view.
-- Auto-hide chat header (on by default): scrolling down collapses search and filters into a slim strip with a search pill and the people-filter eye; scrolling up restores the full header. Both controls work on Linux and Android.
+- Auto-hide chat header (on by default): scrolling down collapses search into a slim strip with a search pill and the people-filter eye; scrolling up restores the full header. Both controls work on Linux and Android.
+- With **Show time once per minute** (on by default), only the last message in a busy minute shows a timestamp. The month activity rail and the right-side position bar can each be hidden in Settings or the chat menu.
 - `Ctrl+F` jumps to the search box; `Ctrl/⌘ K` opens the command palette, and `?` shows the shortcut sheet.
 - The command palette searches every action and open conversation, so advanced features do not need permanent toolbar buttons. In Material 3 mode it uses an M3 search field and rounded, icon-backed result rows.
 
 ### Search and analysis
 
-- Search, filtering by sender and "media only", plus **regex** and **case-sensitive** modes. The **Show messages from** / **I am** row has a visibility button beside it (also in the chat ⋮ menu as **People filters**); click it to hide or show the row instantly. Filters already set stay active and the sender appears as a removable chip. Search, view, sort and export controls are grouped into one toolbar menu; only active filters appear as removable chips, and **Clear filters** resets the query, sender, modes, sort and selection at once.
+- Search, filtering by sender and "media only", plus **regex** and **case-sensitive** modes. The **Show messages from** / **I am** selectors live in a separate **People filters** window; open it with the eye icon in the chat header (always visible, including when the header is collapsed) or from the chat ⋮ menu. Filters apply immediately, stay active while the window is closed, and set senders appear as removable chips. Search, view, sort and export controls are grouped into one toolbar menu; only active filters appear as chips, and **Clear filters** resets the query, sender, modes, sort and selection at once.
 - **Saved searches** store a named combination of query, sender, media-only, regex/case-sensitive and sort mode. Apply, save or delete them from `Search → Saved searches…`; the active preset appears as a chip.
 - Optional search results panel: lists every match, highlights the search words, and jumps to the message in the full conversation when you click a result. Detailed or compact layout, newest or oldest first.
 - The **activity rail** is a thin vertical density bar beside the chat. Click or drag it to jump by month; it can be hidden in the chat menu or Settings.

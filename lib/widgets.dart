@@ -342,6 +342,7 @@ class Bubble extends StatelessWidget {
   final bool mine;
   final bool showName;
   final bool showDate; // put the date next to the time (used when messages are not in date order)
+  final bool showTime; // false for earlier messages in the same minute
   final Store store;
   final Chat chat;
   final String query;
@@ -364,6 +365,7 @@ class Bubble extends StatelessWidget {
     required this.mine,
     required this.showName,
     required this.showDate,
+    this.showTime = true,
     required this.store,
     required this.chat,
     required this.query,
@@ -524,22 +526,27 @@ class Bubble extends StatelessWidget {
 
   Widget metaRow(BuildContext context) {
     final style = Theme.of(context).textTheme.labelSmall;
-    final showStamp = st.showTimes || showDate;
+    final wantsStamp = st.showTimes || showDate;
+    final showStamp = showTime && wantsStamp;
+    // Hidden-by-grouping is different from "showTimes is off": don't replace
+    // the suppressed time with an info icon, or the row stays just as cluttered.
+    final groupedAway = !showTime && wantsStamp;
     return Padding(
       padding: const EdgeInsets.fromLTRB(8, 1, 8, 0),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Tooltip(
-            message: 'Message details',
-            child: InkWell(
-              onTap: () => details(context),
-              onLongPress: () => details(context),
-              child: showStamp
-                  ? Text(stamp, style: style)
-                  : Icon(Icons.info_outline, size: 12, color: style?.color),
+          if (!groupedAway)
+            Tooltip(
+              message: 'Message details',
+              child: InkWell(
+                onTap: () => details(context),
+                onLongPress: () => details(context),
+                child: showStamp
+                    ? Text(stamp, style: style)
+                    : Icon(Icons.info_outline, size: 12, color: style?.color),
+              ),
             ),
-          ),
           if (m.text.isNotEmpty) copyButton(context),
           if (onToggleBookmark != null)
             IconButton(
@@ -577,6 +584,8 @@ class Bubble extends StatelessWidget {
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
       onSecondaryTap: () => details(context),
+      // Android has no right click: long press opens the same message details.
+      onLongPress: () => details(context),
       onTap: onSelect,
       child: child,
     );
@@ -672,7 +681,7 @@ class Bubble extends StatelessWidget {
         : nameColor(displayName(m.sender), theme.brightness);
 
     final spans = <InlineSpan>[
-      if (st.showTimes || showDate)
+      if (showTime && (st.showTimes || showDate))
         TextSpan(
           text: '$stamp  ',
           style: TextStyle(color: cs.outline, fontSize: 12),

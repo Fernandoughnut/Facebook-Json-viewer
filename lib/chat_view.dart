@@ -49,6 +49,7 @@ enum _ChatMenuAction {
   gallery,
   mediaInfo,
   miniMap,
+  indexBar,
   jumpToDate,
   select,
   export,
@@ -1157,14 +1158,16 @@ class _ChatViewState extends State<ChatView> {
           recompute();
         });
       case _ChatMenuAction.peopleFilters:
-        settings.update(
-          () => settings.showPeopleFilters = !settings.showPeopleFilters,
-        );
+        openPeopleFilters();
       case _ChatMenuAction.savedSearches:
         showSavedSearches();
       case _ChatMenuAction.miniMap:
         settings.update(
           () => settings.showActivityRail = !settings.showActivityRail,
+        );
+      case _ChatMenuAction.indexBar:
+        settings.update(
+          () => settings.showIndexScrollbar = !settings.showIndexScrollbar,
         );
       case _ChatMenuAction.gallery:
         setState(() => gallery = !gallery);
@@ -1297,11 +1300,10 @@ class _ChatViewState extends State<ChatView> {
           onChanged: (_) => handleMenu(_ChatMenuAction.mediaOnly),
           child: const Text('Media only'),
         ),
-        CheckboxMenuButton(
-          style: _roundedMenuItemStyle,
-          value: settings.showPeopleFilters,
-          onChanged: (_) => handleMenu(_ChatMenuAction.peopleFilters),
-          child: const Text('People filters'),
+        _menuAction(
+          Icons.visibility_outlined,
+          'People filters…',
+          () => handleMenu(_ChatMenuAction.peopleFilters),
         ),
         if (hasActiveFilters)
           _menuAction(
@@ -1330,6 +1332,12 @@ class _ChatViewState extends State<ChatView> {
           value: settings.showActivityRail,
           onChanged: (_) => handleMenu(_ChatMenuAction.miniMap),
           child: const Text('Activity rail'),
+        ),
+        CheckboxMenuButton(
+          style: _roundedMenuItemStyle,
+          value: settings.showIndexScrollbar,
+          onChanged: (_) => handleMenu(_ChatMenuAction.indexBar),
+          child: const Text('Position bar'),
         ),
         _menuAction(
           Icons.event_available_outlined,
@@ -1618,19 +1626,13 @@ class _ChatViewState extends State<ChatView> {
   }
 
   Widget _peopleFilterToggle() {
-    final shown = settings.showPeopleFilters;
-    void toggle() => settings.update(
-      () => settings.showPeopleFilters = !settings.showPeopleFilters,
-    );
     return IconButton(
-      tooltip: shown ? 'Hide people filters' : 'Show people filters',
-      isSelected: !shown,
+      tooltip: 'People filters',
       visualDensity: VisualDensity.compact,
       constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
       padding: EdgeInsets.zero,
-      icon: const Icon(Icons.visibility_off_outlined, size: 18),
-      selectedIcon: const Icon(Icons.visibility_outlined, size: 18),
-      onPressed: toggle,
+      icon: const Icon(Icons.visibility_outlined, size: 18),
+      onPressed: openPeopleFilters,
     );
   }
 
@@ -1696,31 +1698,36 @@ class _ChatViewState extends State<ChatView> {
     );
   }
 
-  Widget materialFilterBar(
-    List<String> senders,
+  /// The two people selectors. They now live in their own window instead of
+  /// under the search box, so the chat header stays short on small screens.
+  List<Widget> _personFields(
     Store s,
-    SearchPreset? activePreset,
-    bool panelVisible,
-  ) {
-    final fromValue = sender == null ? 'Everyone' : displayName(sender!);
+    List<String> senders, {
+    VoidCallback? onPicked,
+  }) {
     final meSelection = senders.contains(s.me) ? s.me : '';
     final meValue = meSelection.isEmpty
         ? '(not set)'
         : displayName(meSelection);
-    return _filterBarFrame(
-      fields: [
+    if (Theme.of(context).useMaterial3) {
+      return [
         _materialPersonField(
           fieldKey: 'from-${sender ?? ''}-${senders.join('|')}',
           label: 'Show messages from',
           icon: Icons.person_search_outlined,
-          value: fromValue,
+          value: sender == null ? 'Everyone' : displayName(sender!),
           initialValue: sender ?? '',
           searchable: senders.length > 12,
           entries: senderMenuEntries(senders),
-          onSelected: (v) => setState(() {
-            sender = (v == null || v.isEmpty) ? null : v;
-            recompute();
-          }),
+          onSelected: (v) {
+            if (mounted) {
+              setState(() {
+                sender = (v == null || v.isEmpty) ? null : v;
+                recompute();
+              });
+            }
+            onPicked?.call();
+          },
         ),
         _materialPersonField(
           fieldKey: 'me-${s.me}-${senders.join('|')}',
@@ -1730,74 +1737,116 @@ class _ChatViewState extends State<ChatView> {
           initialValue: meSelection,
           searchable: senders.length > 12,
           entries: meMenuEntries(senders),
-          onSelected: (v) => s.setMe(v ?? ''),
+          onSelected: (v) {
+            s.setMe(v ?? '');
+            onPicked?.call();
+          },
         ),
-      ],
-      footer: _filterFooter(activePreset, panelVisible),
-    );
+      ];
+    }
+    return [
+      _classicPersonField<String?>(
+        label: 'Show messages from',
+        icon: Icons.person_search_outlined,
+        value: sender == null ? 'Everyone' : displayName(sender!),
+        initialValue: sender,
+        items: [
+          DropdownMenuItem<String?>(
+            value: null,
+            child: _classicPersonItem(
+              '',
+              'Everyone',
+              fallback: Icons.groups_outlined,
+            ),
+          ),
+          for (final n in senders)
+            DropdownMenuItem<String?>(
+              value: n,
+              child: _classicPersonItem(n, displayName(n)),
+            ),
+        ],
+        onChanged: (v) {
+          if (mounted) {
+            setState(() {
+              sender = v;
+              recompute();
+            });
+          }
+          onPicked?.call();
+        },
+      ),
+      _classicPersonField<String>(
+        label: 'I am',
+        icon: Icons.person_outline,
+        value: meValue,
+        initialValue: meSelection,
+        items: [
+          DropdownMenuItem<String>(
+            value: '',
+            child: _classicPersonItem(
+              '',
+              '(not set)',
+              fallback: Icons.person_off_outlined,
+            ),
+          ),
+          for (final n in senders)
+            DropdownMenuItem<String>(
+              value: n,
+              child: _classicPersonItem(n, displayName(n)),
+            ),
+        ],
+        onChanged: (v) {
+          s.setMe(v ?? '');
+          onPicked?.call();
+        },
+      ),
+    ];
   }
 
-  Widget legacyFilterBar(
-    List<String> senders,
-    Store s,
-    SearchPreset? activePreset,
-    bool panelVisible,
-  ) {
-    final meSelection = senders.contains(s.me) ? s.me : '';
-    final meValue = meSelection.isEmpty
-        ? '(not set)'
-        : displayName(meSelection);
-    return _filterBarFrame(
-      fields: [
-        _classicPersonField<String?>(
-          label: 'Show messages from',
-          icon: Icons.person_search_outlined,
-          value: sender == null ? 'Everyone' : displayName(sender!),
-          initialValue: sender,
-          items: [
-            DropdownMenuItem<String?>(
-              value: null,
-              child: _classicPersonItem(
-                '',
-                'Everyone',
-                fallback: Icons.groups_outlined,
+  /// Open the people filters in a separate dialog. The eye icon that opens it
+  /// is always present in the chat header, even while it is auto-hidden.
+  Future<void> openPeopleFilters() async {
+    if (!mounted) return;
+    _menuController.close();
+    final s = widget.store;
+    final senders = widget.chat.participants.toList()..sort();
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) {
+          // Rebuild the selectors after a pick: the classic DropdownButton only
+          // shows its new value when its parent rebuilds it.
+          final fields = _personFields(
+            s,
+            senders,
+            onPicked: () => setDialogState(() {}),
+          );
+          return AlertDialog(
+            title: const Text('People filters'),
+            content: SizedBox(
+              width: math.min(560.0, MediaQuery.sizeOf(ctx).width - 48),
+              child: SingleChildScrollView(
+                child: _filterBarFrame(
+                  fields: fields,
+                  footer: Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      'Filters apply as soon as you choose a name.',
+                      style: Theme.of(ctx).textTheme.bodySmall,
+                    ),
+                  ),
+                ),
               ),
             ),
-            for (final n in senders)
-              DropdownMenuItem<String?>(
-                value: n,
-                child: _classicPersonItem(n, displayName(n)),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: const Text('Done'),
               ),
-          ],
-          onChanged: (v) => setState(() {
-            sender = v;
-            recompute();
-          }),
-        ),
-        _classicPersonField<String>(
-          label: 'I am',
-          icon: Icons.person_outline,
-          value: meValue,
-          initialValue: meSelection,
-          items: [
-            DropdownMenuItem<String>(
-              value: '',
-              child: _classicPersonItem(
-                '',
-                '(not set)',
-                fallback: Icons.person_off_outlined,
-              ),
-            ),
-            for (final n in senders)
-              DropdownMenuItem<String>(
-                value: n,
-                child: _classicPersonItem(n, displayName(n)),
-              ),
-          ],
-          onChanged: (v) => s.setMe(v ?? ''),
-        ),
-      ],
-      footer: _filterFooter(activePreset, panelVisible),
+            ],
+          );
+        },
+      ),
     );
   }
 
@@ -2250,8 +2299,6 @@ class _ChatViewState extends State<ChatView> {
 
   @override
   Widget build(BuildContext context) {
-    final s = widget.store;
-    final senders = widget.chat.participants.toList()..sort();
     SearchPreset? activePreset;
     for (final p in settings.presets) {
       if (presetMatches(p)) {
@@ -2328,10 +2375,15 @@ class _ChatViewState extends State<ChatView> {
           checked: mediaOnly,
           child: const Text('Media only'),
         ),
-        CheckedPopupMenuItem<Object>(
+        const PopupMenuItem<Object>(
           value: _ChatMenuAction.peopleFilters,
-          checked: settings.showPeopleFilters,
-          child: const Text('People filters'),
+          child: Row(
+            children: [
+              Icon(Icons.visibility_outlined, size: 18),
+              SizedBox(width: 12),
+              Text('People filters…'),
+            ],
+          ),
         ),
         if (hasActiveFilters)
           const PopupMenuItem<Object>(
@@ -2379,6 +2431,11 @@ class _ChatViewState extends State<ChatView> {
           value: _ChatMenuAction.miniMap,
           checked: settings.showActivityRail,
           child: const Text('Activity rail'),
+        ),
+        CheckedPopupMenuItem<Object>(
+          value: _ChatMenuAction.indexBar,
+          checked: settings.showIndexScrollbar,
+          child: const Text('Position bar'),
         ),
         const PopupMenuItem<Object>(
           value: _ChatMenuAction.jumpToDate,
@@ -2475,33 +2532,18 @@ class _ChatViewState extends State<ChatView> {
                                     overflowMenu,
                                   ),
                                 ),
-                                if (settings.showPeopleFilters)
-                                  settings.material3
-                                      ? materialFilterBar(
-                                          senders,
-                                          s,
-                                          activePreset,
-                                          panelVisible,
-                                        )
-                                      : legacyFilterBar(
-                                          senders,
-                                          s,
-                                          activePreset,
-                                          panelVisible,
-                                        )
-                                else
-                                  Padding(
-                                    padding: const EdgeInsets.fromLTRB(
-                                      8,
-                                      0,
-                                      8,
-                                      8,
-                                    ),
-                                    child: _filterFooter(
-                                      activePreset,
-                                      panelVisible,
-                                    ),
+                                Padding(
+                                  padding: const EdgeInsets.fromLTRB(
+                                    8,
+                                    0,
+                                    8,
+                                    8,
                                   ),
+                                  child: _filterFooter(
+                                    activePreset,
+                                    panelVisible,
+                                  ),
+                                ),
                                 const Divider(height: 1),
                               ],
                             )
@@ -2540,7 +2582,10 @@ class _ChatViewState extends State<ChatView> {
                             ],
                           ),
                         ),
-                        if (!gallery && !panelFull && view.isNotEmpty) ...[
+                        if (!gallery &&
+                            !panelFull &&
+                            view.isNotEmpty &&
+                            settings.showIndexScrollbar) ...[
                           const VerticalDivider(width: 1),
                           _IndexScrollbar(
                             itemCount: view.length,
@@ -2738,6 +2783,14 @@ class _ChatViewState extends State<ChatView> {
           final newDay = dateSort && (prev == null || !sameDay(prev.t, m.t));
           final showName =
               !dateSort || prev == null || prev.sender != m.sender || newDay;
+          // Only the last message in a run from the same minute carries a
+          // timestamp. `view` stays chronological even when displayed in
+          // reverse, so the right message keeps its time either way.
+          final showTime =
+              !settings.groupTimesByMinute ||
+              !dateSort ||
+              idx + 1 >= n ||
+              !sameMinute(m.t, view[idx + 1].t);
           final mine =
               widget.store.me.isNotEmpty && m.sender == widget.store.me;
           return Column(
@@ -2758,6 +2811,7 @@ class _ChatViewState extends State<ChatView> {
                 mine: mine,
                 showName: showName,
                 showDate: !dateSort,
+                showTime: showTime,
                 store: widget.store,
                 chat: widget.chat,
                 query: query,

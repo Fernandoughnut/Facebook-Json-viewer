@@ -14,9 +14,13 @@ The format is based on Keep a Changelog, and versions follow Semantic Versioning
 - `CHANGELOG.md` tracking notable changes.
 - A floating date pill in chats shows the date of the messages in the middle of
   the viewport while scrolling (on Linux and Android).
-- Optional auto-hide header: scrolling down collapses search and filters into a
-  slim strip with a search pill, the people-filter eye and an expand button.
-  The people-filter eye is always available.
+- Optional auto-hide header: scrolling down collapses search into a slim strip
+  with a search pill, the people-filter eye and an expand button. The eye is
+  always available.
+- The right-side position bar can now be hidden from Settings or the chat menu,
+  independently of the month activity rail (both Linux and Android).
+- Optional "Show time once per minute": in date-sorted chats only the last
+  message of a minute shows a time, reducing clutter in busy conversations.
 
 ### Changed
 
@@ -32,6 +36,8 @@ The format is based on Keep a Changelog, and versions follow Semantic Versioning
 - Android folder imports list files first, use a larger buffer and avoid extra
   provider queries per file. Re-picking an unchanged folder no longer rescans
   the whole chat's media references.
+- People filters now open in their own dialog instead of pushing the search bar
+  down. The eye icon opens the dialog from either the full or collapsed header.
 
 ### Fixed
 
@@ -44,6 +50,9 @@ The format is based on Keep a Changelog, and versions follow Semantic Versioning
 - Android folder imports no longer leave truncated files behind when interrupted,
   mix up names that sanitize to the same value, or abort everything because one
   document was unreadable.
+- Long-pressing a message on Android now opens Message details, matching
+  right-click on Linux. Hidden-by-grouping timestamps no longer leave stray
+  info icons under earlier messages.
 
 Planned next:
 

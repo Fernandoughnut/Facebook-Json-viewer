@@ -94,6 +94,12 @@ bool sameDay(int? a, int? b) {
   return x.year == y.year && x.month == y.month && x.day == y.day;
 }
 
+/// True when two timestamps fall in the same wall-clock minute.
+bool sameMinute(int? a, int? b) {
+  if (a == null || b == null) return a == b;
+  return a ~/ 60000 == b ~/ 60000;
+}
+
 /// Name shown in the UI: the alias if one was set, otherwise the export's name.
 String displayName(String name) => gSettings?.aliasFor(name) ?? name;
 

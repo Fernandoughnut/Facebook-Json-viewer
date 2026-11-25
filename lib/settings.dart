@@ -118,10 +118,15 @@ class AppSettings extends ChangeNotifier {
   bool resultsNewestFirst = true;
   List<SearchPreset> presets = [];
   bool showActivityRail = true;
-  bool showPeopleFilters = true; // the "Show messages from" / "I am" row
+  // Kept for old state files: people filters now open in their own dialog.
+  bool showPeopleFilters = true;
   bool showDatePill = true; // small date chip that follows the scroll position
   bool autoHideTopBar =
       true; // collapse search/filters while scrolling down a chat
+  bool showIndexScrollbar =
+      true; // position bar at the right edge of an open chat
+  bool groupTimesByMinute =
+      true; // show time only on the last message of a minute
 
   // ---- performance / privacy ----
   bool useParseCache = true; // reuse normalized messages across launches
@@ -380,6 +385,8 @@ class AppSettings extends ChangeNotifier {
     'showPeopleFilters': showPeopleFilters,
     'showDatePill': showDatePill,
     'autoHideTopBar': autoHideTopBar,
+    'showIndexScrollbar': showIndexScrollbar,
+    'groupTimesByMinute': groupTimesByMinute,
     'useParseCache': useParseCache,
     'keepRaw': keepRaw,
     'dedupeImports': dedupeImports,
@@ -426,6 +433,8 @@ class AppSettings extends ChangeNotifier {
     showPeopleFilters = j['showPeopleFilters'] as bool? ?? showPeopleFilters;
     showDatePill = j['showDatePill'] as bool? ?? showDatePill;
     autoHideTopBar = j['autoHideTopBar'] as bool? ?? autoHideTopBar;
+    showIndexScrollbar = j['showIndexScrollbar'] as bool? ?? showIndexScrollbar;
+    groupTimesByMinute = j['groupTimesByMinute'] as bool? ?? groupTimesByMinute;
     final presetsJson = j['searchPresets'];
     presets = presetsJson is List
         ? presetsJson

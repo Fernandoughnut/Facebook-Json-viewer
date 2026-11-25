@@ -516,7 +516,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       section(
         context,
         'Reading',
-        'layout bubbles compact plain time clock replies photo gallery image',
+        'layout bubbles compact plain time clock minute group replies photo gallery image',
       ),
       const Text('Open conversations at'),
       const SizedBox(height: 8),
@@ -586,6 +586,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
         value: settings.showTimes,
         onChanged: (v) => settings.update(() => settings.showTimes = v),
       ),
+      SwitchListTile(
+        contentPadding: EdgeInsets.zero,
+        title: const Text('Show time once per minute'),
+        subtitle: const Text(
+          'When several messages arrive inside one minute, only the last one shows a time. Works in date-sorted conversations.',
+        ),
+        value: settings.groupTimesByMinute,
+        onChanged: (v) =>
+            settings.update(() => settings.groupTimesByMinute = v),
+      ),
       slider(
         label: 'Photo width in chat',
         value: settings.chatImageWidth,
@@ -609,7 +619,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       section(
         context,
         'Search results panel',
-        'search results layout compact detailed newest activity rail minimap',
+        'search results layout compact detailed newest activity rail minimap position bar scrollbar',
       ),
       const Text('Layout'),
       const SizedBox(height: 8),
@@ -647,6 +657,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
       SwitchListTile(
         contentPadding: EdgeInsets.zero,
+        title: const Text('Show position bar in chats'),
+        subtitle: const Text(
+          'The thin bar at the far right for jumping through a long conversation by message index. Can also be toggled in the chat menu.',
+        ),
+        value: settings.showIndexScrollbar,
+        onChanged: (v) =>
+            settings.update(() => settings.showIndexScrollbar = v),
+      ),
+      SwitchListTile(
+        contentPadding: EdgeInsets.zero,
         title: const Text('Floating date in chats'),
         subtitle: const Text(
           'A small pill at the top of the message list shows the date of the messages you are scrolling through.',
@@ -658,7 +678,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         contentPadding: EdgeInsets.zero,
         title: const Text('Auto-hide chat header'),
         subtitle: const Text(
-          'Scrolling down collapses the search and filter row to a slim strip. The people-filter eye stays available, and scrolling up brings it back.',
+          'Scrolling down collapses the search bar to a slim strip. The people-filter eye stays available, and scrolling up brings the full header back.',
         ),
         value: settings.autoHideTopBar,
         onChanged: (v) => settings.update(() => settings.autoHideTopBar = v),
