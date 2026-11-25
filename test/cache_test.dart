@@ -11,7 +11,7 @@ void main() {
   const fixture = 'test/fixtures/test_message.json';
 
   test('cache round-trips normalized messages', () async {
-    final dir = await Directory.systemTemp.createTemp('fb_viewer_cache_test_');
+    final dir = await Directory.systemTemp.createTemp('indexed_cache_test_');
     addTearDown(() async {
       if (dir.existsSync()) dir.deleteSync(recursive: true);
     });
@@ -33,7 +33,7 @@ void main() {
   });
 
   test('cache rejects results written by an older parser', () async {
-    final dir = await Directory.systemTemp.createTemp('fb_viewer_cache_test_');
+    final dir = await Directory.systemTemp.createTemp('indexed_cache_test_');
     addTearDown(() async {
       if (dir.existsSync()) dir.deleteSync(recursive: true);
     });
@@ -56,7 +56,7 @@ void main() {
   });
 
   test('cache invalidates when the source file changes', () async {
-    final dir = await Directory.systemTemp.createTemp('fb_viewer_cache_test_');
+    final dir = await Directory.systemTemp.createTemp('indexed_cache_test_');
     addTearDown(() async {
       if (dir.existsSync()) dir.deleteSync(recursive: true);
     });
@@ -78,7 +78,7 @@ void main() {
   });
 
   test('keepRaw: false drops original maps but keeps the message', () async {
-    final dir = await Directory.systemTemp.createTemp('fb_viewer_cache_test_');
+    final dir = await Directory.systemTemp.createTemp('indexed_cache_test_');
     addTearDown(() async {
       if (dir.existsSync()) dir.deleteSync(recursive: true);
     });
@@ -96,7 +96,7 @@ void main() {
   });
 
   test('clearParseCache removes stale temporary files', () async {
-    final dir = await Directory.systemTemp.createTemp('fb_viewer_cache_test_');
+    final dir = await Directory.systemTemp.createTemp('indexed_cache_test_');
     addTearDown(() async {
       if (dir.existsSync()) dir.deleteSync(recursive: true);
     });

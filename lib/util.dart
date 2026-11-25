@@ -169,7 +169,7 @@ Future<String?> pickFolder(Store store) async {
 
   final picked = await FilePicker.pickFiles();
   if (picked.isEmpty) return null;
-  final dir = await Directory.systemTemp.createTemp('fb_viewer_media_');
+  final dir = await Directory.systemTemp.createTemp('indexed_media_');
   var copied = 0;
   for (final f in picked) {
     final name = safeMediaFileName(f.name);

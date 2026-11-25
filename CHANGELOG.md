@@ -6,11 +6,24 @@ The format is based on Keep a Changelog, and versions follow Semantic Versioning
 
 ## [Unreleased]
 
-Planned for Android Phase 2:
+### Added
 
-- Repeatable universal and split-per-ABI sideload APK builds.
+- Repeatable Android sideload build script (`tool/build_android.sh`) producing
+  a universal APK plus split APKs for `arm64-v8a`, `armeabi-v7a` and `x86_64`,
+  each with a SHA-256 checksum.
+- `CHANGELOG.md` tracking notable changes.
+
+### Changed
+
+- Temporary media folders, test fixtures and generated export filenames now use
+  `indexed_` prefixes instead of `fb_viewer_`. Package and config names stay
+  `fb_viewer` for compatibility.
+
+Planned next:
+
 - Device validation on the Android 17 AOSP phone and Android 14 tablet.
 - Edge-to-edge, back-gesture and touch-layout checks.
+- Replace the placeholder launcher icon with the new Indexed artwork.
 
 ## [1.2.0] - 2026-11-26
 

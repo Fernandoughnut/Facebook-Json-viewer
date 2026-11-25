@@ -12,7 +12,7 @@ void main() {
     'PIN can be set, checked, reset, and the reset is written immediately',
     () async {
       final dir = await Directory.systemTemp.createTemp(
-        'fb_viewer_settings_test_',
+        'indexed_settings_test_',
       );
       addTearDown(() {
         if (dir.existsSync()) dir.deleteSync(recursive: true);
@@ -43,9 +43,7 @@ void main() {
   );
 
   test('saved searches replace by name and survive a reload', () async {
-    final dir = await Directory.systemTemp.createTemp(
-      'fb_viewer_presets_test_',
-    );
+    final dir = await Directory.systemTemp.createTemp('indexed_presets_test_');
     addTearDown(() {
       if (dir.existsSync()) dir.deleteSync(recursive: true);
     });
@@ -91,7 +89,7 @@ void main() {
   });
 
   test('design style persists and switches ThemeData.useMaterial3', () async {
-    final dir = await Directory.systemTemp.createTemp('fb_viewer_design_test_');
+    final dir = await Directory.systemTemp.createTemp('indexed_design_test_');
     addTearDown(() {
       if (dir.existsSync()) dir.deleteSync(recursive: true);
     });
@@ -119,7 +117,7 @@ void main() {
 
   test('people filters visibility persists', () async {
     final dir = await Directory.systemTemp.createTemp(
-      'fb_viewer_people_filters_test_',
+      'indexed_people_filters_test_',
     );
     addTearDown(() {
       if (dir.existsSync()) dir.deleteSync(recursive: true);
@@ -141,7 +139,7 @@ void main() {
 
   test('archived and removed chat keys persist', () async {
     final dir = await Directory.systemTemp.createTemp(
-      'fb_viewer_chat_state_test_',
+      'indexed_chat_state_test_',
     );
     addTearDown(() {
       if (dir.existsSync()) dir.deleteSync(recursive: true);
@@ -165,7 +163,7 @@ void main() {
   test(
     'aliases and notes reload from their values, not MapEntry.toString()',
     () async {
-      final dir = await Directory.systemTemp.createTemp('fb_viewer_text_test_');
+      final dir = await Directory.systemTemp.createTemp('indexed_text_test_');
       addTearDown(() {
         if (dir.existsSync()) dir.deleteSync(recursive: true);
       });
@@ -189,7 +187,7 @@ void main() {
 
   test('breadcrumbs are written synchronously to the error log', () async {
     final dir = await Directory.systemTemp.createTemp(
-      'fb_viewer_breadcrumb_test_',
+      'indexed_breadcrumb_test_',
     );
     addTearDown(() {
       if (dir.existsSync()) dir.deleteSync(recursive: true);

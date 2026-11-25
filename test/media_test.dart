@@ -9,7 +9,7 @@ import 'package:fb_viewer/store.dart';
 
 void main() {
   test('duplicateMedia groups identical files by streamed hash', () async {
-    final dir = await Directory.systemTemp.createTemp('fb_viewer_media_test_');
+    final dir = await Directory.systemTemp.createTemp('indexed_media_test_');
     addTearDown(() {
       if (dir.existsSync()) dir.deleteSync(recursive: true);
     });

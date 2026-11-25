@@ -11,9 +11,7 @@ void main() {
   test(
     'removing a chat also clears its entries from the reply index',
     () async {
-      final dir = await Directory.systemTemp.createTemp(
-        'fb_viewer_store_test_',
-      );
+      final dir = await Directory.systemTemp.createTemp('indexed_store_test_');
       addTearDown(() {
         if (dir.existsSync()) dir.deleteSync(recursive: true);
       });
@@ -40,7 +38,7 @@ void main() {
   );
 
   test('media stats are cached until the media folders change', () async {
-    final dir = await Directory.systemTemp.createTemp('fb_viewer_store_test_');
+    final dir = await Directory.systemTemp.createTemp('indexed_store_test_');
     addTearDown(() {
       if (dir.existsSync()) dir.deleteSync(recursive: true);
     });
@@ -73,7 +71,7 @@ void main() {
   });
 
   test('missing media export is not truncated by the dialog sample', () async {
-    final dir = await Directory.systemTemp.createTemp('fb_viewer_store_test_');
+    final dir = await Directory.systemTemp.createTemp('indexed_store_test_');
     addTearDown(() {
       if (dir.existsSync()) dir.deleteSync(recursive: true);
     });
@@ -95,7 +93,7 @@ void main() {
   });
 
   test('removing every chat from a file stops restoring that file', () async {
-    final dir = await Directory.systemTemp.createTemp('fb_viewer_store_test_');
+    final dir = await Directory.systemTemp.createTemp('indexed_store_test_');
     addTearDown(() {
       if (dir.existsSync()) dir.deleteSync(recursive: true);
     });
@@ -119,7 +117,7 @@ void main() {
   });
 
   test('global search returns nothing for an empty query', () async {
-    final dir = await Directory.systemTemp.createTemp('fb_viewer_store_test_');
+    final dir = await Directory.systemTemp.createTemp('indexed_store_test_');
     addTearDown(() {
       if (dir.existsSync()) dir.deleteSync(recursive: true);
     });
@@ -138,7 +136,7 @@ void main() {
   });
 
   test('global search stops at the limit and reports truncation', () async {
-    final dir = await Directory.systemTemp.createTemp('fb_viewer_store_test_');
+    final dir = await Directory.systemTemp.createTemp('indexed_store_test_');
     addTearDown(() {
       if (dir.existsSync()) dir.deleteSync(recursive: true);
     });
@@ -163,7 +161,7 @@ void main() {
   });
 
   test('bookmark toggles do not invalidate heavy insights data', () async {
-    final dir = await Directory.systemTemp.createTemp('fb_viewer_store_test_');
+    final dir = await Directory.systemTemp.createTemp('indexed_store_test_');
     addTearDown(() {
       if (dir.existsSync()) dir.deleteSync(recursive: true);
     });

@@ -9,7 +9,7 @@ import 'package:fb_viewer/parser.dart';
 
 void main(List<String> args) {
   final count = args.isNotEmpty ? int.tryParse(args[0]) ?? 100000 : 100000;
-  final outPath = args.length > 1 ? args[1] : '${Directory.systemTemp.path}/fb_viewer_large_export.json';
+  final outPath = args.length > 1 ? args[1] : '${Directory.systemTemp.path}/indexed_large_export.json';
   final start = DateTime(2020, 1, 1).millisecondsSinceEpoch;
   final people = ['Ana', 'Ben', 'Carla'];
 

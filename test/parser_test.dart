@@ -87,7 +87,7 @@ void main() {
     'scanDir resolves case-only filename collisions deterministically',
     () async {
       final dir = await Directory.systemTemp.createTemp(
-        'fb_viewer_scan_dir_test_',
+        'indexed_scan_dir_test_',
       );
       addTearDown(() {
         if (dir.existsSync()) dir.deleteSync(recursive: true);
