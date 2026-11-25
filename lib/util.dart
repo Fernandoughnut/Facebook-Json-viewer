@@ -146,10 +146,31 @@ Future<void> openExternal(String path, BuildContext context) async {
 }
 
 /// Ask for a folder. On desktop this returns the folder directly. On Android,
-/// SAF gives a content:// handle that cannot be walked with dart:io, so fall
-/// back to selecting the media files and copying them into a temporary folder
-/// that the existing scanner can index.
+/// SAF folder handles are content:// URIs that dart:io cannot walk, so we pick
+/// photos instead and copy them into app-private storage that survives restarts.
 Future<String?> pickFolder(Store store) async {
+  if (Platform.isAndroid) {
+    final picked = await FilePicker.pickFiles(
+      type: FileType.image,
+      dialogTitle: 'Select photos',
+    );
+    if (picked.isEmpty) return null;
+    final stamp = DateTime.now().microsecondsSinceEpoch;
+    final dir = Directory(
+      '${store.settings.mediaDir}${Platform.pathSeparator}$stamp',
+    );
+    await dir.create(recursive: true);
+    var copied = 0;
+    for (final f in picked) {
+      final name = safeMediaFileName(f.name);
+      final target = File('${dir.path}${Platform.pathSeparator}$name');
+      await target.writeAsBytes(await f.readAsBytes());
+      copied++;
+    }
+    store.setStatus('Copied $copied selected photo(s) into Indexed storage.');
+    return copied == 0 ? null : dir.path;
+  }
+
   Uri? uri;
   try {
     uri = await FilePicker.pickDirectory();
@@ -157,30 +178,12 @@ Future<String?> pickFolder(Store store) async {
     uri = null;
   }
   if (uri != null && uri.scheme == 'file') return uri.toFilePath();
-
-  if (uri != null || !Platform.isAndroid) {
-    if (uri != null) {
-      store.setStatus(
-        'Folder handle $uri cannot be scanned on this platform. Pick the files instead.',
-      );
-    }
-    return null;
+  if (uri != null) {
+    store.setStatus(
+      'Folder handle $uri cannot be scanned on this platform. Pick the files instead.',
+    );
   }
-
-  final picked = await FilePicker.pickFiles();
-  if (picked.isEmpty) return null;
-  final dir = await Directory.systemTemp.createTemp('indexed_media_');
-  var copied = 0;
-  for (final f in picked) {
-    final name = safeMediaFileName(f.name);
-    final target = File('${dir.path}${Platform.pathSeparator}$name');
-    await target.writeAsBytes(await f.readAsBytes());
-    copied++;
-  }
-  store.setStatus(
-    'Copied $copied selected media file(s) into a temporary folder for this session.',
-  );
-  return copied == 0 ? null : dir.path;
+  return null;
 }
 
 /// File names from [safeFileName] are used when copying content:// picks.

@@ -1,8 +1,9 @@
 // User settings and the remembered session, stored in one small JSON file.
 //
-// Linux location: $XDG_CONFIG_HOME/fb_viewer/state.json (usually ~/.config/fb_viewer/state.json).
-// On Android this will move to the app's private folder in the Android step; until then
-// saving there fails silently and the app simply starts fresh each time.
+// Linux: $XDG_CONFIG_HOME/fb_viewer/state.json (usually ~/.config/fb_viewer/state.json).
+// Android: the app-private documents directory, so state survives restarts but is
+// removed when the app is uninstalled. Imported JSON and copied media live in
+// sibling folders there, not in Android's temporary cache.
 
 import 'dart:async';
 import 'dart:convert';
@@ -10,6 +11,7 @@ import 'dart:io';
 
 import 'package:crypto/crypto.dart';
 import 'package:material_ui/material_ui.dart';
+import 'package:path_provider/path_provider.dart';
 
 /// Where a conversation opens.
 enum StartAt { newest, oldest, leftOff }
@@ -87,10 +89,11 @@ T _enumByName<T extends Enum>(List<T> values, dynamic name, T fallback) {
 }
 
 class AppSettings extends ChangeNotifier {
-  /// Test hook: override the config folder instead of touching the process env.
-  AppSettings({this._configDir});
+  /// Test hooks: override the folders instead of touching the process env.
+  AppSettings({this._configDir, this._dataDir});
 
-  final String? _configDir;
+  String? _configDir;
+  String? _dataDir;
 
   // ---- appearance ----
   ThemeMode themeMode = ThemeMode.system;
@@ -156,7 +159,8 @@ class AppSettings extends ChangeNotifier {
   Future<void> _lastWrite = Future.value();
 
   String get dir {
-    if (_configDir != null) return _configDir;
+    final override = _configDir;
+    if (override != null) return override;
     final home = Platform.environment['HOME'] ?? '.';
     final base = Platform.environment['XDG_CONFIG_HOME'] ?? '$home/.config';
     return '$base/fb_viewer';
@@ -165,6 +169,12 @@ class AppSettings extends ChangeNotifier {
   String get filePath => '$dir/state.json';
   String get logPath => '$dir/error.log';
   String get cacheDir => '$dir/cache';
+
+  /// App-private root for durable imports/media on Android. On desktop it stays
+  /// equal to [dir], so existing Linux paths are unchanged.
+  String get dataDir => _dataDir ?? dir;
+  String get importDir => '$dataDir/imports';
+  String get mediaDir => '$dataDir/media';
 
   ThemeData? _lightTheme;
   ThemeData? _darkTheme;
@@ -490,6 +500,16 @@ class AppSettings extends ChangeNotifier {
   }
 
   Future<void> load() async {
+    if (_configDir == null && Platform.isAndroid) {
+      try {
+        final docs = await getApplicationDocumentsDirectory();
+        _dataDir = docs.path;
+        _configDir = '${docs.path}/config';
+      } catch (_) {
+        // Fall back to the Linux-style location if the platform channel fails.
+      }
+    }
+    _dataDir ??= dir;
     try {
       final f = File(filePath);
       if (await f.exists()) {
@@ -526,16 +546,19 @@ class AppSettings extends ChangeNotifier {
 
   Future<void> _writeNow() async {
     try {
+      // state.json is small. Synchronous I/O guarantees the write completes
+      // before Android can kill a backgrounded process, which matters because
+      // lifecycle callbacks cannot await an async file write.
       final f = File(filePath);
-      await f.parent.create(recursive: true);
+      f.parent.createSync(recursive: true);
       // Write to a temporary file first: a crash mid-write must not leave a
       // half-written state.json that looks like default settings on next run.
       final tmp = File('${f.path}.tmp');
-      await tmp.writeAsString(
+      tmp.writeAsStringSync(
         const JsonEncoder.withIndent('  ').convert(toJson()),
       );
-      if (await f.exists()) await f.delete();
-      await tmp.rename(f.path);
+      if (f.existsSync()) f.deleteSync();
+      tmp.renameSync(f.path);
     } catch (_) {}
   }
 

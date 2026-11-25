@@ -175,8 +175,8 @@ dart run tool/generate_large_export.dart 100000 /tmp/opencode/large_export.json
 
 ## Current limitations
 
-- Settings and the remembered session are saved to `$HOME/.config/fb_viewer/state.json` (`~/.config/fb_viewer/state.json` on Linux, app-private storage on Android). Android storage has not been device-tested yet.
-- Android media access works by selecting files (copied to a temporary folder), not by walking an entire `content://` tree.
+- Settings and the remembered session are saved to `$HOME/.config/fb_viewer/state.json` on Linux. On Android they live in the app-private documents directory (`config/state.json`), so they survive app restarts but are removed if the app is uninstalled.
+- On Android, imported JSON files and selected photos are copied into that same app-private storage (`imports/` and `media/`), not left in Android's temporary cache. Media is selected as individual photos; SAF folder trees (`content://`) cannot be scanned directly.
 - Videos and voice clips open in the default player on Linux only.
 - HEIC photos cannot be displayed.
 - Desktop drag-and-drop of files onto the window is not implemented; use **Open JSON** or the folder-import button. Bulk import and multi-file selection are supported.

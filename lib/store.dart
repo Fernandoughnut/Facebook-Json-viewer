@@ -353,6 +353,32 @@ class Store extends ChangeNotifier {
       ? 'id:${m.id}'
       : 'msg:${m.t}|${m.sender}|${m.text}|${m.media.map((x) => x.uri).join(',')}';
 
+  /// Android's file picker copies picks into the app cache, which can be wiped
+  /// between runs. Keep a durable copy for anything we decide to remember.
+  Future<String> _persistJsonPath(String path) async {
+    if (!Platform.isAndroid) return path;
+    final src = File(path);
+    if (!await src.exists()) return path;
+    final dir = Directory(settings.importDir);
+    await dir.create(recursive: true);
+    final raw = path.split(Platform.pathSeparator).last;
+    final clean = raw.replaceAll(RegExp(r'[\\/:*?"<>|\r\n]'), '_').trim();
+    final name = clean.isEmpty ? 'import.json' : clean;
+    var target = File('${dir.path}${Platform.pathSeparator}$name');
+    if (await target.exists()) {
+      // Reuse an identical copy instead of duplicating every restore.
+      if ((await target.stat()).size == (await src.stat()).size) {
+        return target.path;
+      }
+      target = File(
+        '${dir.path}${Platform.pathSeparator}'
+        '${DateTime.now().microsecondsSinceEpoch}-$name',
+      );
+    }
+    await src.copy(target.path);
+    return target.path;
+  }
+
   Future<void> addJsonFiles(List<String> paths, {bool remember = true}) async {
     var added = 0;
     var duplicates = 0;
@@ -369,7 +395,8 @@ class Store extends ChangeNotifier {
     _busy++;
     notifyListeners();
     try {
-      for (final path in paths) {
+      for (final picked in paths) {
+        final path = await _persistJsonPath(picked);
         final name = path.split(pathSep).last;
         if (_loadedPaths.contains(path)) continue;
         status = 'Reading $name…';
