@@ -5,6 +5,7 @@ import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:material_ui/material_ui.dart';
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/services.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
@@ -71,7 +72,7 @@ class _BucketBuilder {
 /// dangerous for a conversation with tens of thousands of variable-height
 /// bubbles: dragging the thumb makes the sliver lay out every earlier message
 /// just to find the offset, which can freeze or abort the process. The chat
-/// uses the activity rail (index-based jumps) instead of that scrollbar.
+/// uses [_IndexScrollbar] and the activity rail, both of which jump by index.
 class _NoDesktopScrollbar extends ScrollBehavior {
   const _NoDesktopScrollbar();
 
@@ -81,6 +82,97 @@ class _NoDesktopScrollbar extends ScrollBehavior {
     Widget child,
     ScrollableDetails details,
   ) => child;
+}
+
+/// A scrollbar that maps dragging to message *indices*, not pixel offsets.
+/// The chat list has variable-height bubbles, so a pixel scrollbar would make
+/// the sliver lay out every earlier message to find the offset. This one jumps
+/// straight to an index and lets the list rebuild around that item only.
+class _IndexScrollbar extends StatelessWidget {
+  const _IndexScrollbar({
+    required this.itemCount,
+    required this.topIndex,
+    required this.visibleCount,
+    required this.onJump,
+  });
+
+  final int itemCount;
+  final ValueListenable<int> topIndex;
+  final ValueListenable<int> visibleCount;
+  final ValueChanged<int> onJump;
+
+  void _jumpTo(double dy, double height, double thumbHeight) {
+    if (height <= 0 || itemCount <= 0) return;
+    final travel = math.max(1.0, height - thumbHeight);
+    final fraction = ((dy - thumbHeight / 2) / travel).clamp(0.0, 1.0);
+    onJump((fraction * (itemCount - 1)).round().clamp(0, itemCount - 1));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return ValueListenableBuilder<int>(
+      valueListenable: topIndex,
+      builder: (context, top, _) => ValueListenableBuilder<int>(
+        valueListenable: visibleCount,
+        builder: (context, visible, _) {
+          return LayoutBuilder(
+            builder: (context, box) {
+              final height = box.maxHeight;
+              final thumbHeight = math.max(
+                24.0,
+                height * visible / math.max(1, itemCount),
+              );
+              final maxTop = math.max(0, itemCount - visible);
+              final progress = maxTop == 0
+                  ? 0.0
+                  : (top / maxTop).clamp(0.0, 1.0);
+              final thumbTop = progress * math.max(0.0, height - thumbHeight);
+              return GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTapDown: (d) =>
+                    _jumpTo(d.localPosition.dy, height, thumbHeight),
+                onPanStart: (d) =>
+                    _jumpTo(d.localPosition.dy, height, thumbHeight),
+                onPanUpdate: (d) =>
+                    _jumpTo(d.localPosition.dy, height, thumbHeight),
+                child: Container(
+                  width: 14,
+                  margin: const EdgeInsets.symmetric(vertical: 4),
+                  child: Stack(
+                    children: [
+                      Positioned.fill(
+                        child: Container(
+                          width: 4,
+                          margin: const EdgeInsets.symmetric(horizontal: 5),
+                          decoration: BoxDecoration(
+                            color: cs.surfaceContainerHighest,
+                            borderRadius: BorderRadius.circular(2),
+                          ),
+                        ),
+                      ),
+                      Positioned(
+                        top: thumbTop,
+                        height: thumbHeight,
+                        left: 3,
+                        right: 3,
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: cs.onSurface.withValues(alpha: 0.32),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          );
+        },
+      ),
+    );
+  }
 }
 
 class ChatView extends StatefulWidget {
@@ -151,7 +243,9 @@ class _ChatViewState extends State<ChatView> {
   String _activitySig = '';
   Map<String, int> _monthIndex = const {};
   String _monthSig = '';
-  int _railBucket = -1;
+  final ValueNotifier<int> _railBucket = ValueNotifier(-1);
+  final ValueNotifier<int> _scrollTop = ValueNotifier(0);
+  final ValueNotifier<int> _visibleCount = ValueNotifier(10);
 
   AppSettings get settings => widget.store.settings;
   String get query => qc.text.trim();
@@ -235,6 +329,9 @@ class _ChatViewState extends State<ChatView> {
     qc.dispose();
     searchFocus.dispose();
     _resultsController.dispose();
+    _railBucket.dispose();
+    _scrollTop.dispose();
+    _visibleCount.dispose();
     super.dispose();
   }
 
@@ -342,7 +439,9 @@ class _ChatViewState extends State<ChatView> {
       _restoreIndex = settings.startAt == StartAt.leftOff
           ? _findRestore()
           : null;
-      _railBucket = -1;
+      _railBucket.value = -1;
+      _scrollTop.value = _restoreIndex ?? 0;
+      _visibleCount.value = 10;
       _newList();
     }
     results = [];
@@ -447,23 +546,27 @@ class _ChatViewState extends State<ChatView> {
   void _onPositions() {
     if (view.isEmpty || sort != SortMode.oldest) return;
     int? top;
+    int? bottom;
     for (final p in positions.itemPositions.value) {
       if (p.itemTrailingEdge <= 0 || p.itemLeadingEdge >= 1) {
         continue; // not on screen
       }
       final idx = _reversed ? view.length - 1 - p.index : p.index;
       if (top == null || idx < top) top = idx;
+      if (bottom == null || idx > bottom) bottom = idx;
     }
     if (top == null || top >= view.length) return;
+    if (_scrollTop.value != top) _scrollTop.value = top;
+    final visible = (bottom ?? top) - top + 1;
+    if (_visibleCount.value != visible) _visibleCount.value = visible;
     final t = view[top].t;
     if (t == null) return;
-    // Keep the activity rail's highlight in step with ordinary scrolling, so
-    // it works as a safe, index-based replacement for the desktop scrollbar.
+    // Keep the activity rail's highlight in step with ordinary scrolling.
     if (settings.showActivityRail) {
       final label = _monthKey(t);
       final bucket = _activityBuckets().indexWhere((b) => b.label == label);
-      if (bucket >= 0 && bucket != _railBucket) {
-        setState(() => _railBucket = bucket);
+      if (bucket >= 0 && bucket != _railBucket.value) {
+        _railBucket.value = bucket;
       }
     }
     if (_lastSavedPosT == t || settings.chatPos[widget.chat.key] == t) {
@@ -1608,8 +1711,8 @@ class _ChatViewState extends State<ChatView> {
     final i = (dy / height * buckets.length)
         .clamp(0, buckets.length - 1)
         .toInt();
-    if (i == _railBucket) return;
-    _railBucket = i;
+    if (i == _railBucket.value) return;
+    _railBucket.value = i;
     final label = buckets[i].label;
     final idx = _monthIndexForView()[label];
     if (idx != null && idx >= 0) {
@@ -1652,30 +1755,35 @@ class _ChatViewState extends State<ChatView> {
                 _scrubRail(d.localPosition.dy, box.maxHeight, buckets),
             onPanUpdate: (d) =>
                 _scrubRail(d.localPosition.dy, box.maxHeight, buckets),
-            child: Column(
-              children: [
-                for (var i = 0; i < buckets.length; i++)
-                  Expanded(
-                    child: Align(
-                      alignment: Alignment.bottomCenter,
-                      child: Tooltip(
-                        message:
-                            '${buckets[i].label} · ${buckets[i].count} message${buckets[i].count == 1 ? '' : 's'}',
-                        child: Container(
-                          width: 14,
-                          height: math.max(
-                            1.0,
-                            (slot - 2) * buckets[i].count / max,
-                          ),
-                          decoration: BoxDecoration(
-                            color: i == _railBucket ? activeColor : idleColor,
-                            borderRadius: BorderRadius.circular(2),
+            child: ValueListenableBuilder<int>(
+              valueListenable: _railBucket,
+              builder: (context, activeBucket, _) => Column(
+                children: [
+                  for (var i = 0; i < buckets.length; i++)
+                    Expanded(
+                      child: Align(
+                        alignment: Alignment.bottomCenter,
+                        child: Tooltip(
+                          message:
+                              '${buckets[i].label} · ${buckets[i].count} message${buckets[i].count == 1 ? '' : 's'}',
+                          child: Container(
+                            width: 14,
+                            height: math.max(
+                              1.0,
+                              (slot - 2) * buckets[i].count / max,
+                            ),
+                            decoration: BoxDecoration(
+                              color: i == activeBucket
+                                  ? activeColor
+                                  : idleColor,
+                              borderRadius: BorderRadius.circular(2),
+                            ),
                           ),
                         ),
                       ),
                     ),
-                  ),
-              ],
+                ],
+              ),
             ),
           );
         },
@@ -1740,6 +1848,10 @@ class _ChatViewState extends State<ChatView> {
       );
     });
   }
+
+  /// Lightweight scrub used by the scrollbar: move the list without rebuilding
+  /// toolbars or restarting the highlight timer on every drag update.
+  void scrubTo(int idx) => _queueJump(idx);
 
   /// Scroll the conversation to message [idx] (an index into [view]) and flash it.
   void jumpToMessage(int idx) {
@@ -2059,6 +2171,15 @@ class _ChatViewState extends State<ChatView> {
                           view.isNotEmpty)
                         activityRail(),
                       Expanded(child: body),
+                      if (!gallery && !panelFull && view.isNotEmpty) ...[
+                        const VerticalDivider(width: 1),
+                        _IndexScrollbar(
+                          itemCount: view.length,
+                          topIndex: _scrollTop,
+                          visibleCount: _visibleCount,
+                          onJump: scrubTo,
+                        ),
+                      ],
                       if (panelSide) ...[
                         const VerticalDivider(width: 1),
                         SizedBox(width: 360, child: resultsPanel()),
