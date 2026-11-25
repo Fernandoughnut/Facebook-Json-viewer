@@ -117,6 +117,12 @@ To build and package that bundle locally:
 
 The script builds the release bundle, archives its *contents* with the required trailing `.`, and writes a `.sha256` file beside the archive.
 
+### Android (early support)
+
+The first Android pass is for sideloading on an AOSP phone and tablet. The app is labelled **Indexed** and uses the application ID `dev.local.indexed`; the Dart package and config folder are still named `fb_viewer` so existing data keeps working. Release APKs are currently debug-signed. If an older `dev.local.fb_viewer` build is installed, uninstall it first — Android treats the new ID as a separate app.
+
+Core reading, search, filters, export and inline photos are supported. Videos/audio, HEIC thumbnails and persistent SAF folder permissions are still pending; see Current limitations below.
+
 Pushing a version tag such as `v1.1.0` triggers `.github/workflows/release.yml`: GitHub checks that the tag matches `pubspec.yaml`, runs the checks, builds the Linux release bundle, packages it as `Indexed-linux-x64-v1.1.0.tar.gz`, and attaches it to a new GitHub Release with a SHA-256 checksum.
 
 To measure parsing on a synthetic 100k-message export:
@@ -159,7 +165,7 @@ dart run tool/generate_large_export.dart 100000 /tmp/opencode/large_export.json
 
 ## Current limitations
 
-- Settings and the remembered session are saved to `~/.config/fb_viewer/state.json` on Linux. Android storage for this has not been tested yet.
+- Settings and the remembered session are saved to `$HOME/.config/fb_viewer/state.json` (`~/.config/fb_viewer/state.json` on Linux, app-private storage on Android). Android storage has not been device-tested yet.
 - Android media access works by selecting files (copied to a temporary folder), not by walking an entire `content://` tree.
 - Videos and voice clips open in the default player on Linux only.
 - HEIC photos cannot be displayed.

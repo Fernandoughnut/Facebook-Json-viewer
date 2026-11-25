@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace = "dev.local.fb_viewer"
+    namespace = "dev.local.indexed"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -15,10 +15,9 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "dev.local.fb_viewer"
-        // You can update the following values to match your application needs.
-        // For more information, see: https://flutter.dev/to/review-gradle-config.
+        // Matches the Linux app id. The Dart package and config folder stay
+        // named fb_viewer for compatibility with existing data.
+        applicationId = "dev.local.indexed"
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         // Uses the version code from pubspec.yaml. When using split APKs, 1000 * ABI_VERSION
@@ -31,8 +30,8 @@ android {
 
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
+            // Sideload builds are currently debug-signed. Replace this with a
+            // real release signingConfig before publishing a stable identity.
             signingConfig = signingConfigs.getByName("debug")
         }
     }

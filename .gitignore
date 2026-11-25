@@ -41,6 +41,8 @@ migrate_working_dir/
 android/local.properties
 *.tar.gz
 *.sha256
+*.apk
+*.aab
 
 # Symbolication related
 app.*.symbols

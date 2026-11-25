@@ -1,4 +1,4 @@
-package dev.local.fb_viewer
+package dev.local.indexed
 
 import io.flutter.embedding.android.FlutterActivity
 
