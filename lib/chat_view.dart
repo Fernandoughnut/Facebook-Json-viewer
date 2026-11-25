@@ -116,11 +116,32 @@ class _IndexScrollbarState extends State<_IndexScrollbar> {
   int? _lastJumped;
   DateTime? _lastJump;
   Timer? _timer;
+  Timer? _settleTimer;
+  bool _clearScheduled = false;
 
   @override
   void dispose() {
     _timer?.cancel();
+    _settleTimer?.cancel();
     super.dispose();
+  }
+
+  /// The thumb stays under the finger until the list reports that it caught
+  /// up. Clearing it on release makes it visibly snap back before the jump.
+  void _schedulePreviewClear(int idx) {
+    if (_clearScheduled) return;
+    _clearScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _clearScheduled = false;
+      if (mounted && _preview == idx) setState(() => _preview = null);
+    });
+  }
+
+  void _settlePreview(int idx) {
+    _settleTimer?.cancel();
+    _settleTimer = Timer(const Duration(seconds: 2), () {
+      if (mounted && _preview == idx) setState(() => _preview = null);
+    });
   }
 
   int _indexFor(double dy, double height, double thumbHeight) {
@@ -136,6 +157,7 @@ class _IndexScrollbarState extends State<_IndexScrollbar> {
   void _drag(double dy, double height, double thumbHeight) {
     final idx = _indexFor(dy, height, thumbHeight);
     if (_preview == idx) return;
+    _settleTimer?.cancel();
     setState(() => _preview = idx);
 
     final now = DateTime.now();
@@ -163,12 +185,14 @@ class _IndexScrollbarState extends State<_IndexScrollbar> {
     _timer = null;
     final idx = _preview;
     _pending = null;
-    if (idx != null && idx != _lastJumped) {
-      _lastJump = DateTime.now();
-      _lastJumped = idx;
-      widget.onJump(idx);
+    if (idx != null) {
+      if (idx != _lastJumped) {
+        _lastJump = DateTime.now();
+        _lastJumped = idx;
+        widget.onJump(idx);
+      }
+      _settlePreview(idx);
     }
-    if (_preview != null && mounted) setState(() => _preview = null);
   }
 
   @override
@@ -187,6 +211,11 @@ class _IndexScrollbarState extends State<_IndexScrollbar> {
                 height * visible / math.max(1, widget.itemCount),
               );
               final maxTop = math.max(0, widget.itemCount - visible);
+              if (_preview != null &&
+                  (top - _preview!).abs() <=
+                      math.max(2, (visible * 0.5).round())) {
+                _schedulePreviewClear(_preview!);
+              }
               final position = _preview ?? top;
               final progress = maxTop == 0
                   ? 0.0
@@ -311,6 +340,8 @@ class _ChatViewState extends State<ChatView> {
   Map<String, int> _monthIndex = const {};
   String _monthSig = '';
   final ValueNotifier<int> _railBucket = ValueNotifier(-1);
+  int? _railScrubIdx;
+  bool _railDragging = false;
   final ValueNotifier<int> _scrollTop = ValueNotifier(0);
   final ValueNotifier<int> _visibleCount = ValueNotifier(10);
 
@@ -507,7 +538,9 @@ class _ChatViewState extends State<ChatView> {
           ? _findRestore()
           : null;
       _railBucket.value = -1;
-      _scrollTop.value = _restoreIndex ?? 0;
+      // A reversed list shows the newest message first, so its chronological
+      // top index is the last item until positions are reported.
+      _scrollTop.value = _restoreIndex ?? (_reversed ? view.length - 1 : 0);
       _visibleCount.value = 10;
       _newList();
     }
@@ -606,12 +639,14 @@ class _ChatViewState extends State<ChatView> {
     scroll = ItemScrollController();
     positions = ItemPositionsListener.create();
     positions.itemPositions.addListener(_onPositions);
+    _railScrubIdx = null;
+    _railDragging = false;
     _listGen++;
   }
 
   /// Remember the message at the top of the screen, for "where I left off".
   void _onPositions() {
-    if (view.isEmpty || sort != SortMode.oldest) return;
+    if (view.isEmpty) return;
     int? top;
     int? bottom;
     for (final p in positions.itemPositions.value) {
@@ -628,14 +663,18 @@ class _ChatViewState extends State<ChatView> {
     if (_visibleCount.value != visible) _visibleCount.value = visible;
     final t = view[top].t;
     if (t == null) return;
-    // Keep the activity rail's highlight in step with ordinary scrolling.
-    if (settings.showActivityRail) {
+    // Keep the activity rail's highlight in step with ordinary scrolling, but
+    // do not fight the thumb while the user is scrubbing the rail itself.
+    if (settings.showActivityRail && !_railDragging) {
       final label = _monthKey(t);
       final bucket = _activityBuckets().indexWhere((b) => b.label == label);
       if (bucket >= 0 && bucket != _railBucket.value) {
         _railBucket.value = bucket;
       }
     }
+    // Only date-sorted views have a chronological position worth restoring;
+    // sorting by sender/length can put any timestamp at the top.
+    if (!dateSort) return;
     if (_lastSavedPosT == t || settings.chatPos[widget.chat.key] == t) {
       _lastSavedPosT = t;
       return;
@@ -1773,26 +1812,51 @@ class _ChatViewState extends State<ChatView> {
     return _activity;
   }
 
-  void _scrubRail(double dy, double height, List<ActivityBucket> buckets) {
+  void _scrubRail(
+    double dy,
+    double height,
+    List<ActivityBucket> buckets, {
+    bool finish = false,
+  }) {
     if (height <= 0 || buckets.isEmpty) return;
     final i = (dy / height * buckets.length)
         .clamp(0, buckets.length - 1)
         .toInt();
-    if (i == _railBucket.value) return;
+    if (i == _railBucket.value && !finish) return;
     _railBucket.value = i;
+    _railDragging = !finish;
     final label = buckets[i].label;
     final idx = _monthIndexForView()[label];
-    if (idx != null && idx >= 0) {
-      jumpToMessage(idx);
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'No visible messages from $label. Clear filters to jump there.',
+    if (idx == null || idx < 0) {
+      _railScrubIdx = null;
+      if (finish) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'No visible messages from $label. Clear filters to jump there.',
+            ),
           ),
-        ),
-      );
+        );
+      }
+      return;
     }
+    _railScrubIdx = idx;
+    if (finish) {
+      // One full jump on release; dragging uses the lightweight scrub so it
+      // does not rebuild toolbars and restart the highlight timer per frame.
+      jumpToMessage(idx);
+      _railScrubIdx = null;
+      _railDragging = false;
+    } else {
+      scrubTo(idx);
+    }
+  }
+
+  void _finishRailScrub() {
+    _railDragging = false;
+    final idx = _railScrubIdx;
+    _railScrubIdx = null;
+    if (idx != null) jumpToMessage(idx);
   }
 
   Widget activityRail() {
@@ -1818,10 +1882,18 @@ class _ChatViewState extends State<ChatView> {
             behavior: HitTestBehavior.opaque,
             onTapDown: (d) =>
                 _scrubRail(d.localPosition.dy, box.maxHeight, buckets),
+            onTapUp: (d) => _scrubRail(
+              d.localPosition.dy,
+              box.maxHeight,
+              buckets,
+              finish: true,
+            ),
             onPanStart: (d) =>
                 _scrubRail(d.localPosition.dy, box.maxHeight, buckets),
             onPanUpdate: (d) =>
                 _scrubRail(d.localPosition.dy, box.maxHeight, buckets),
+            onPanEnd: (_) => _finishRailScrub(),
+            onPanCancel: _finishRailScrub,
             child: ValueListenableBuilder<int>(
               valueListenable: _railBucket,
               builder: (context, activeBucket, _) => Column(
