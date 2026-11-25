@@ -22,7 +22,7 @@ class _GlobalSearchScreenState extends State<GlobalSearchScreen> {
   String? sender;
   bool mediaOnly = false;
   List<GlobalHit> hits = [];
-  int totalHits = 0;
+  bool truncated = false;
 
   @override
   void initState() {
@@ -55,15 +55,18 @@ class _GlobalSearchScreenState extends State<GlobalSearchScreen> {
   }
 
   void _search() {
-    final matches = widget.store.searchAll(
+    if (query.isEmpty) {
+      hits = const <GlobalHit>[];
+      truncated = false;
+      return;
+    }
+    final result = widget.store.searchAll(
       query,
       sender: sender,
       mediaOnly: mediaOnly,
     );
-    totalHits = matches.length;
-    hits = totalHits > 20000
-        ? matches.sublist(0, 20000) // keep the list light
-        : matches;
+    hits = result.hits;
+    truncated = result.truncated;
   }
 
   @override
@@ -158,8 +161,11 @@ class _GlobalSearchScreenState extends State<GlobalSearchScreen> {
                 ),
                 const SizedBox(width: 12),
                 Text(
-                  '$totalHits match${totalHits == 1 ? '' : 'es'}'
-                  '${totalHits > hits.length ? ' (showing ${hits.length})' : ''}',
+                  query.isEmpty
+                      ? 'Type to search all conversations'
+                      : truncated
+                      ? '${formatCount(hits.length)}+ matches'
+                      : '${formatCount(hits.length)} match${hits.length == 1 ? '' : 'es'}',
                   style: theme.textTheme.bodySmall,
                 ),
               ],
@@ -168,7 +174,13 @@ class _GlobalSearchScreenState extends State<GlobalSearchScreen> {
           const Divider(height: 1),
           Expanded(
             child: hits.isEmpty
-                ? const Center(child: Text('No matches.'))
+                ? Center(
+                    child: Text(
+                      query.isEmpty
+                          ? 'Type to search all conversations.'
+                          : 'No matches.',
+                    ),
+                  )
                 : ListView.builder(
                     itemCount: hits.length,
                     itemBuilder: (context, i) {

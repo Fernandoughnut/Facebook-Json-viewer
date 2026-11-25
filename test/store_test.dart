@@ -117,6 +117,79 @@ void main() {
     }
     expect(settings.jsonPaths, isNot(contains(json.path)));
   });
+
+  test('global search returns nothing for an empty query', () async {
+    final dir = await Directory.systemTemp.createTemp('fb_viewer_store_test_');
+    addTearDown(() {
+      if (dir.existsSync()) dir.deleteSync(recursive: true);
+    });
+    final settings = AppSettings(configDir: dir.path);
+    addTearDown(settings.dispose);
+    await settings.load();
+    final store = Store(settings);
+
+    final chat = Chat('chat-d', 'Chat D');
+    chat.messages.add(_msg('m1', 'Ana', 1000, text: 'hello'));
+    store.chats[chat.key] = chat;
+
+    final result = store.searchAll('');
+    expect(result.hits, isEmpty);
+    expect(result.truncated, isFalse);
+  });
+
+  test('global search stops at the limit and reports truncation', () async {
+    final dir = await Directory.systemTemp.createTemp('fb_viewer_store_test_');
+    addTearDown(() {
+      if (dir.existsSync()) dir.deleteSync(recursive: true);
+    });
+    final settings = AppSettings(configDir: dir.path);
+    addTearDown(settings.dispose);
+    await settings.load();
+    final store = Store(settings);
+
+    final chat = Chat('chat-e', 'Chat E');
+    for (var i = 0; i < 12; i++) {
+      chat.messages.add(_msg('m$i', 'Ana', i + 1, text: 'needle'));
+    }
+    store.chats[chat.key] = chat;
+
+    final capped = store.searchAll('needle', limit: 10);
+    expect(capped.hits, hasLength(10));
+    expect(capped.truncated, isTrue);
+
+    final exact = store.searchAll('needle', limit: 12);
+    expect(exact.hits, hasLength(12));
+    expect(exact.truncated, isFalse);
+  });
+
+  test('bookmark toggles do not invalidate heavy insights data', () async {
+    final dir = await Directory.systemTemp.createTemp('fb_viewer_store_test_');
+    addTearDown(() {
+      if (dir.existsSync()) dir.deleteSync(recursive: true);
+    });
+    final settings = AppSettings(configDir: dir.path);
+    addTearDown(settings.dispose);
+    await settings.load();
+    final store = Store(settings);
+
+    final chat = Chat('chat-f', 'Chat F');
+    final msg = _msg('m1', 'Ana', 1000);
+    chat.messages.add(msg);
+    store.chats[chat.key] = chat;
+
+    final dataRevision = store.dataRevision;
+    final bookmarkRevision = store.bookmarkRevision;
+
+    store.toggleBookmark(chat, msg);
+    expect(store.bookmarkRevision, bookmarkRevision + 1);
+    expect(store.dataRevision, dataRevision);
+    expect(store.bookmarked(), hasLength(1));
+
+    store.toggleBookmark(chat, msg);
+    expect(store.bookmarkRevision, bookmarkRevision + 2);
+    expect(store.dataRevision, dataRevision);
+    expect(store.bookmarked(), isEmpty);
+  });
 }
 
 Msg _msg(
@@ -125,11 +198,12 @@ Msg _msg(
   int t, {
   Reply? reply,
   List<Media> media = const [],
+  String text = 'hello',
 }) => Msg(
   id: id,
   sender: sender,
   t: t,
-  text: 'hello',
+  text: text,
   media: media,
   reactions: const [],
   share: '',

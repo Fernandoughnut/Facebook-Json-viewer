@@ -357,7 +357,12 @@ List<ParsedThread> parseFile(String path, {bool keepRaw = true}) {
 // field-detection code again. The source file's size and modified time are part
 // of the cache key, so editing or replacing the export invalidates it.
 
-const cacheVersion = 1;
+/// Layout of the cached JSON itself. Bump when the encoder/decoder changes.
+const cacheFormatVersion = 1;
+
+/// Parsing behaviour. Bump whenever field detection, reply handling or
+/// normalization changes, even if the encoded layout stays the same.
+const parserVersion = 2;
 
 String _cacheHash(String source) {
   // FNV-1a, enough here because this is only a cache file name (not security).
@@ -432,7 +437,8 @@ Msg _decodeMsg(List l) => Msg(
 
 Object _encodeThreads(List<ParsedThread> threads, bool keepRaw) =>
     <String, dynamic>{
-      'v': cacheVersion,
+      'format': cacheFormatVersion,
+      'parser': parserVersion,
       'threads': [
         for (final t in threads)
           <String, dynamic>{
@@ -446,7 +452,10 @@ Object _encodeThreads(List<ParsedThread> threads, bool keepRaw) =>
 
 List<ParsedThread> _decodeThreads(Object? value) {
   final root = value as Map?;
-  if (root == null || root['v'] != cacheVersion || root['threads'] is! List) {
+  if (root == null ||
+      root['format'] != cacheFormatVersion ||
+      root['parser'] != parserVersion ||
+      root['threads'] is! List) {
     throw const FormatException('Unsupported parse cache version');
   }
   final out = <ParsedThread>[];
@@ -474,7 +483,7 @@ List<ParsedThread> parseFileCached(
 
   final stat = File(path).statSync();
   final sig =
-      '$cacheVersion|$path|${stat.size}|${stat.modified.millisecondsSinceEpoch}|${keepRaw ? 1 : 0}';
+      '$cacheFormatVersion|$parserVersion|$path|${stat.size}|${stat.modified.millisecondsSinceEpoch}|${keepRaw ? 1 : 0}';
   final file = File('$cacheDir/${_cacheHash(sig)}.json');
   try {
     if (file.existsSync()) {

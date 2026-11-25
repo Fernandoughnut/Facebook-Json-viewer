@@ -12,6 +12,17 @@ import 'store.dart';
 
 String two(int n) => n.toString().padLeft(2, '0');
 
+/// Group digits for counters such as "20,000+ matches".
+String formatCount(int n) {
+  final s = n.toString();
+  final out = StringBuffer();
+  for (var i = 0; i < s.length; i++) {
+    if (i > 0 && (s.length - i) % 3 == 0) out.write(',');
+    out.write(s[i]);
+  }
+  return out.toString();
+}
+
 /// Position in [matches] of the next/previous match after [current].
 /// Returns -1 when there are no matches; wraps at both ends.
 int nextMatchPosition(int? current, List<int> matches, int delta) {

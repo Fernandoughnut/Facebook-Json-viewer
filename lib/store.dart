@@ -65,6 +65,12 @@ class GlobalHit {
   const GlobalHit(this.chat, this.msg);
 }
 
+/// Maximum number of hits kept by global search. The screen shows a "+" when
+/// [GlobalSearchResult.truncated] is true instead of pretending it counted all.
+const int globalSearchLimit = 20000;
+
+typedef GlobalSearchResult = ({List<GlobalHit> hits, bool truncated});
+
 class Store extends ChangeNotifier {
   final AppSettings settings;
   Store(this.settings) {
@@ -86,6 +92,10 @@ class Store extends ChangeNotifier {
 
   /// Bumped when loaded messages change, so expensive derived views can cache.
   int dataRevision = 0;
+
+  /// Bumped when bookmarks change, so lightweight counters can refresh without
+  /// rerunning analysis of every message.
+  int bookmarkRevision = 0;
 
   /// Which JSON paths contributed each chat key. Lets us drop a remembered
   /// file once every conversation it contained has been removed from the app.
@@ -109,28 +119,40 @@ class Store extends ChangeNotifier {
 
   /// Search every loaded conversation. Query is case-insensitive and covers
   /// text, both original and friendly sender names, links and media filenames.
-  List<GlobalHit> searchAll(
+  /// An empty query returns nothing: global search is not a message browser.
+  /// Stops as soon as one result past [limit] is found so a broad query never
+  /// builds an unbounded list on the UI thread.
+  GlobalSearchResult searchAll(
     String query, {
     String? sender,
     bool mediaOnly = false,
+    int limit = globalSearchLimit,
   }) {
     final q = query.trim().toLowerCase();
     final out = <GlobalHit>[];
+    if (q.isEmpty) return (hits: out, truncated: false);
+
+    var truncated = false;
+    outer:
     for (final c in sortedChats) {
       for (final m in c.messages) {
         if (sender != null && m.sender != sender) continue;
         if (mediaOnly && m.media.isEmpty) continue;
-        if (q.isEmpty ||
+        final hit =
             m.lower.contains(q) ||
             m.sender.toLowerCase().contains(q) ||
             settings.aliasFor(m.sender).toLowerCase().contains(q) ||
             (m.share.isNotEmpty && m.share.toLowerCase().contains(q)) ||
-            m.media.any((x) => x.name.toLowerCase().contains(q))) {
-          out.add(GlobalHit(c, m));
+            m.media.any((x) => x.name.toLowerCase().contains(q));
+        if (!hit) continue;
+        if (out.length >= limit) {
+          truncated = true;
+          break outer;
         }
+        out.add(GlobalHit(c, m));
       }
     }
-    return out;
+    return (hits: out, truncated: truncated);
   }
 
   void setStatus(String s) {
@@ -294,7 +316,7 @@ class Store extends ChangeNotifier {
       list.add(k);
     }
     if (list.isEmpty) settings.bookmarks.remove(c.key);
-    dataRevision++;
+    bookmarkRevision++;
     settings.save();
     notifyListeners();
   }
@@ -310,7 +332,6 @@ class Store extends ChangeNotifier {
     } else {
       settings.notes[k] = v;
     }
-    dataRevision++;
     settings.save();
     notifyListeners();
   }
@@ -503,7 +524,7 @@ class Store extends ChangeNotifier {
       }
     }
     settings.chatPos.remove(c.key);
-    settings.bookmarks.remove(c.key);
+    if (settings.bookmarks.remove(c.key) != null) bookmarkRevision++;
     settings.chatDirs.remove(c.key);
     final prefix = '${c.key}|';
     settings.notes.removeWhere((key, _) => key.startsWith(prefix));
@@ -569,6 +590,7 @@ class Store extends ChangeNotifier {
     sharedDirs.clear();
     mediaVersion++;
     dataRevision++;
+    bookmarkRevision++;
     forgetSession();
     status = 'Cleared.';
     notifyListeners();

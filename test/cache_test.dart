@@ -1,5 +1,6 @@
 // The parse cache must survive a round trip and invalidate when the source changes.
 
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -29,6 +30,29 @@ void main() {
       first.single.messages.first.text,
     );
     expect(fromCache.single.messages.last.reactions.last.emoji, '❤');
+  });
+
+  test('cache rejects results written by an older parser', () async {
+    final dir = await Directory.systemTemp.createTemp('fb_viewer_cache_test_');
+    addTearDown(() async {
+      if (dir.existsSync()) dir.deleteSync(recursive: true);
+    });
+    final source = File('${dir.path}${Platform.pathSeparator}export.json');
+    File(fixture).copySync(source.path);
+    final cache = '${dir.path}/cache';
+
+    parseFileCached(source.path, cacheDir: cache);
+    final cacheFile = Directory(cache).listSync().whereType<File>().single;
+    final root = jsonDecode(cacheFile.readAsStringSync()) as Map;
+    expect(root['format'], cacheFormatVersion);
+    expect(root['parser'], parserVersion);
+
+    // Simulate a cache written before a parser-behaviour change.
+    root.remove('parser');
+    cacheFile.writeAsStringSync(jsonEncode(root));
+
+    final rebuilt = parseFileCached(source.path, cacheDir: cache);
+    expect(rebuilt.single.messages.length, 74);
   });
 
   test('cache invalidates when the source file changes', () async {

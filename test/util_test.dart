@@ -62,6 +62,13 @@ void main() {
     expect(nextMatchPosition(0, const <int>[], 1), -1);
   });
 
+  test('formatCount groups thousands', () {
+    expect(formatCount(1), '1');
+    expect(formatCount(999), '999');
+    expect(formatCount(20000), '20,000');
+    expect(formatCount(1234567), '1,234,567');
+  });
+
   test('firstIndexAtOrAfter finds the first message on a picked date', () {
     final times = [_At(1000), _At(2000), _At(2000), _At(3000)];
     expect(firstIndexAtOrAfter(times, 2000, (x) => x.t), 1);

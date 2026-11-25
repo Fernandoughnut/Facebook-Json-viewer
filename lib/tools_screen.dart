@@ -140,7 +140,6 @@ class _InsightsData {
   final int media;
   final int links;
   final int replies;
-  final int bookmarks;
   final int maxSender;
   final int maxYear;
   final int medianResponse;
@@ -159,7 +158,6 @@ class _InsightsData {
     required this.media,
     required this.links,
     required this.replies,
-    required this.bookmarks,
     required this.maxSender,
     required this.maxYear,
     required this.medianResponse,
@@ -171,65 +169,161 @@ class _InsightsData {
     required this.gaps,
     required this.wordsBySender,
   });
+
+  /// Rebuild the typed view from the isolate's sendable result.
+  factory _InsightsData.fromResult(Map<String, Object?> r) {
+    List<MapEntry<String, int>> stringCounts(Object? value) => [
+      for (final e in value as List<dynamic>)
+        MapEntry<String, int>('${e[0]}', e[1] as int),
+    ];
+    List<MapEntry<int, int>> yearCounts(Object? value) => [
+      for (final e in value as List<dynamic>)
+        MapEntry<int, int>(e[0] as int, e[1] as int),
+    ];
+    List<({int ms, String chat, int? t})> gapList(Object? value) => [
+      for (final e in value as List<dynamic>)
+        (ms: e[0] as int, chat: e[1] as String, t: e[2] as int?),
+    ];
+
+    final words = <String, Map<String, int>>{};
+    for (final e in (r['wordsBySender'] as Map<String, dynamic>).entries) {
+      words[e.key] = {
+        for (final w in e.value as List<dynamic>) '${w[0]}': w[1] as int,
+      };
+    }
+
+    return _InsightsData(
+      msgCount: r['msgCount'] as int,
+      chatCount: r['chatCount'] as int,
+      reactions: r['reactions'] as int,
+      media: r['media'] as int,
+      links: r['links'] as int,
+      replies: r['replies'] as int,
+      maxSender: r['maxSender'] as int,
+      maxYear: r['maxYear'] as int,
+      medianResponse: r['medianResponse'] as int,
+      responseCount: r['responseCount'] as int,
+      topSenders: stringCounts(r['topSenders']),
+      years: yearCounts(r['years']),
+      months: stringCounts(r['months']),
+      topEmojis: stringCounts(r['topEmojis']),
+      gaps: gapList(r['gaps']),
+      wordsBySender: words,
+    );
+  }
 }
 
-/// Pure, relatively expensive pass over every message. Called only when the
-/// loaded messages or display names change, not on every status notification.
-_InsightsData _analyzeInsights(Store store) {
-  final msgs = <Msg>[
-    for (final c in store.chats.values)
-      for (final m in c.messages) m,
-  ];
+/// Flatten the store into sendable rows for the compute isolate. Aliases are
+/// resolved here so the expensive pass does not need the global [gSettings].
+Map<String, Object?> _insightsSnapshot(Store store) {
+  final rows = <List<Object?>>[];
+  for (final c in store.chats.values) {
+    for (final m in c.messages) {
+      rows.add([
+        c.key,
+        c.title,
+        displayName(m.sender),
+        m.t,
+        m.text,
+        m.media.length,
+        m.share.isNotEmpty ? 1 : 0,
+        m.reply != null ? 1 : 0,
+        [for (final r in m.reactions) r.emoji],
+      ]);
+    }
+  }
+  return {'rows': rows};
+}
+
+/// Heavy read-only pass. Runs in an isolate; only sendable data crosses over.
+/// Row layout: key, title, sender, time, text, media count, link flag,
+/// reply flag, reaction emojis.
+Map<String, Object?> analyzeInsightsRows(Map<String, Object?> input) {
+  final rawRows = input['rows'] as List<dynamic>;
+
   final bySender = <String, int>{};
   final byYear = <int, int>{};
   final byMonth = <String, int>{};
   final emojis = <String, int>{};
-  var reactions = 0, media = 0, links = 0, replies = 0;
-  for (final m in msgs) {
-    final name = displayName(m.sender);
-    bySender[name] = (bySender[name] ?? 0) + 1;
-    if (m.t != null) {
-      final d = DateTime.fromMillisecondsSinceEpoch(m.t!);
+  final responses = <int>[];
+  final gapRows = <List<Object?>>[];
+  final wordsBySender = <String, Map<String, int>>{};
+  final chatKeys = <String>{};
+  final wordRe = RegExp(r"[a-z']{3,}", caseSensitive: false);
+
+  var msgCount = 0, reactions = 0, media = 0, links = 0, replies = 0;
+  String? currentKey;
+  String currentTitle = '';
+  int? prevT;
+  String? prevSender;
+  var longestMs = 0;
+  int? longestT;
+
+  void finishChat() {
+    if (longestMs > 0) gapRows.add([longestMs, currentTitle, longestT]);
+  }
+
+  for (final item in rawRows) {
+    final row = item as List<dynamic>;
+    final key = row[0] as String;
+    final title = row[1] as String;
+    final sender = row[2] as String;
+    final t = row[3] as int?;
+    final text = row[4] as String;
+    final mediaCount = row[5] as int;
+    final hasLink = row[6] == 1;
+    final hasReply = row[7] == 1;
+    final messageEmojis = row[8] as List<dynamic>;
+
+    if (currentKey != null && key != currentKey) finishChat();
+    if (key != currentKey) {
+      currentKey = key;
+      currentTitle = title;
+      prevT = null;
+      prevSender = null;
+      longestMs = 0;
+      longestT = null;
+    }
+    chatKeys.add(key);
+
+    msgCount++;
+    bySender[sender] = (bySender[sender] ?? 0) + 1;
+    if (t != null) {
+      final d = DateTime.fromMillisecondsSinceEpoch(t);
       byYear[d.year] = (byYear[d.year] ?? 0) + 1;
       final month = '${d.year}-${two(d.month)}';
       byMonth[month] = (byMonth[month] ?? 0) + 1;
     }
-    media += m.media.length;
-    if (m.share.isNotEmpty) links++;
-    if (m.reply != null) replies++;
-    for (final r in m.reactions) {
+    media += mediaCount;
+    if (hasLink) links++;
+    if (hasReply) replies++;
+    for (final item in messageEmojis) {
+      final emoji = item as String;
       reactions++;
-      emojis[r.emoji] = (emojis[r.emoji] ?? 0) + 1;
+      emojis[emoji] = (emojis[emoji] ?? 0) + 1;
     }
-  }
 
-  final responses = <int>[];
-  final gaps = <({int ms, String chat, int? t})>[];
-  final wordsBySender = <String, Map<String, int>>{};
-  final wordRe = RegExp(r"[a-z']{3,}", caseSensitive: false);
-  for (final c in store.chats.values) {
-    var longest = (ms: 0, chat: c.title, t: null as int?);
-    for (var i = 1; i < c.messages.length; i++) {
-      final a = c.messages[i - 1];
-      final b = c.messages[i];
-      if (a.t == null || b.t == null) continue;
-      final gap = (b.t! - a.t!).abs();
-      if (gap > longest.ms) longest = (ms: gap, chat: c.title, t: b.t);
-      if (a.sender != b.sender) responses.add(gap);
-    }
-    if (longest.ms > 0) gaps.add(longest);
-    for (final m in c.messages) {
-      final name = displayName(m.sender);
-      final counts = wordsBySender.putIfAbsent(name, () => <String, int>{});
-      for (final match in wordRe.allMatches(m.text.toLowerCase())) {
-        final w = match.group(0)!;
-        counts[w] = (counts[w] ?? 0) + 1;
+    if (prevT != null && t != null) {
+      final gap = (t - prevT).abs();
+      if (gap > longestMs) {
+        longestMs = gap;
+        longestT = t;
       }
+      if (prevSender != sender) responses.add(gap);
+    }
+    prevT = t;
+    prevSender = sender;
+
+    final counts = wordsBySender.putIfAbsent(sender, () => <String, int>{});
+    for (final match in wordRe.allMatches(text.toLowerCase())) {
+      final w = match.group(0)!;
+      counts[w] = (counts[w] ?? 0) + 1;
     }
   }
-  gaps.sort((a, b) => b.ms.compareTo(a.ms));
-  responses.sort();
+  if (currentKey != null) finishChat();
 
+  gapRows.sort((a, b) => (b[0] as int).compareTo(a[0] as int));
+  responses.sort();
   final topSenders = bySender.entries.toList()
     ..sort((a, b) => b.value.compareTo(a.value));
   final topEmojis = emojis.entries.toList()
@@ -238,50 +332,150 @@ _InsightsData _analyzeInsights(Store store) {
   final months = byMonth.entries.toList()
     ..sort((a, b) => a.key.compareTo(b.key));
 
-  return _InsightsData(
-    msgCount: msgs.length,
-    chatCount: store.chats.length,
-    reactions: reactions,
-    media: media,
-    links: links,
-    replies: replies,
-    bookmarks: store.bookmarked().length,
-    maxSender: topSenders.isEmpty ? 1 : topSenders.first.value,
-    maxYear: years.isEmpty
+  final words = <String, List<List<Object?>>>{};
+  for (final e in wordsBySender.entries) {
+    words[e.key] = [
+      for (final w in e.value.entries) [w.key, w.value],
+    ];
+  }
+
+  return {
+    'msgCount': msgCount,
+    'chatCount': chatKeys.length,
+    'reactions': reactions,
+    'media': media,
+    'links': links,
+    'replies': replies,
+    'maxSender': topSenders.isEmpty ? 1 : topSenders.first.value,
+    'maxYear': years.isEmpty
         ? 1
         : years.map((e) => e.value).reduce((a, b) => a > b ? a : b),
-    medianResponse: responses.isEmpty ? 0 : responses[responses.length ~/ 2],
-    responseCount: responses.length,
-    topSenders: topSenders,
-    years: years,
-    months: months,
-    topEmojis: topEmojis,
-    gaps: gaps,
-    wordsBySender: wordsBySender,
-  );
+    'medianResponse': responses.isEmpty ? 0 : responses[responses.length ~/ 2],
+    'responseCount': responses.length,
+    'topSenders': [
+      for (final e in topSenders) [e.key, e.value],
+    ],
+    'years': [
+      for (final e in years) [e.key, e.value],
+    ],
+    'months': [
+      for (final e in months) [e.key, e.value],
+    ],
+    'topEmojis': [
+      for (final e in topEmojis) [e.key, e.value],
+    ],
+    'gaps': gapRows,
+    'wordsBySender': words,
+  };
 }
 
-_InsightsData? _insightsCache;
-String _insightsSig = '';
-
-class InsightsTab extends StatelessWidget {
+class InsightsTab extends StatefulWidget {
   final Store store;
   const InsightsTab({super.key, required this.store});
 
   @override
+  State<InsightsTab> createState() => _InsightsTabState();
+}
+
+class _InsightsTabState extends State<InsightsTab> {
+  Future<_InsightsData>? _future;
+  String _sig = '';
+  int _bookmarkRevision = 0;
+  int _bookmarkCount = 0;
+
+  int _countBookmarks() => widget.store.bookmarked().length;
+
+  @override
+  void initState() {
+    super.initState();
+    _bookmarkRevision = widget.store.bookmarkRevision;
+    _bookmarkCount = _countBookmarks();
+    widget.store.addListener(_onStoreChanged);
+    gSettings?.addListener(_onSettingsChanged);
+    _ensureFuture();
+  }
+
+  @override
+  void didUpdateWidget(covariant InsightsTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.store != widget.store) {
+      oldWidget.store.removeListener(_onStoreChanged);
+      widget.store.addListener(_onStoreChanged);
+      _sig = '';
+      _future = null;
+      _bookmarkRevision = widget.store.bookmarkRevision;
+      _bookmarkCount = _countBookmarks();
+      _ensureFuture();
+      return;
+    }
+    final sig = _signature();
+    if (sig != _sig || _future == null) {
+      _bookmarkCount = _countBookmarks();
+      _startAnalysis(sig);
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.store.removeListener(_onStoreChanged);
+    gSettings?.removeListener(_onSettingsChanged);
+    super.dispose();
+  }
+
+  String _signature() =>
+      '${identityHashCode(widget.store)}|${widget.store.dataRevision}'
+      '|${gSettings?.revision ?? 0}';
+
+  void _startAnalysis(String sig) {
+    _sig = sig;
+    _future = compute(
+      analyzeInsightsRows,
+      _insightsSnapshot(widget.store),
+    ).then(_InsightsData.fromResult);
+  }
+
+  void _ensureFuture() {
+    final sig = _signature();
+    if (sig == _sig && _future != null) return;
+    _startAnalysis(sig);
+  }
+
+  void _onStoreChanged() {
+    if (!mounted) return;
+    final sig = _signature();
+    final bookmarkRevision = widget.store.bookmarkRevision;
+    if (sig == _sig &&
+        bookmarkRevision == _bookmarkRevision &&
+        _future != null) {
+      return;
+    }
+    setState(() {
+      _bookmarkRevision = widget.store.bookmarkRevision;
+      _bookmarkCount = _countBookmarks();
+      if (sig != _sig || _future == null) _startAnalysis(sig);
+    });
+  }
+
+  void _onSettingsChanged() {
+    if (!mounted) return;
+    final sig = _signature();
+    if (sig == _sig && _future != null) return;
+    setState(() {
+      _bookmarkCount = _countBookmarks();
+      if (sig != _sig || _future == null) _startAnalysis(sig);
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return ListenableBuilder(
-      listenable: store,
-      builder: (context, _) {
-        final sig =
-            '${identityHashCode(store)}|${store.dataRevision}|${gSettings?.revision ?? 0}';
-        final data = sig == _insightsSig && _insightsCache != null
-            ? _insightsCache!
-            : _analyzeInsights(store);
-        if (sig != _insightsSig) {
-          _insightsSig = sig;
-          _insightsCache = data;
+    return FutureBuilder<_InsightsData>(
+      future: _future,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done ||
+            !snapshot.hasData) {
+          return const Center(child: CircularProgressIndicator());
         }
+        final data = snapshot.data!;
         if (data.msgCount == 0) {
           return const Center(child: Text('Open a JSON file to see insights.'));
         }
@@ -317,7 +511,7 @@ class InsightsTab extends StatelessWidget {
                     Text('$media media files'),
                     Text('$links links'),
                     Text('$replies replies'),
-                    Text('${data.bookmarks} bookmarks'),
+                    Text('$_bookmarkCount bookmarks'),
                   ],
                 ),
               ),
@@ -343,10 +537,10 @@ class InsightsTab extends StatelessWidget {
                 subtitle: LinearProgressIndicator(value: e.value / maxYear),
               ),
             Text(
-              'Messages per month',
+              'Messages per month (latest 60)',
               style: Theme.of(context).textTheme.titleSmall,
             ),
-            for (final e in months.take(60))
+            for (final e in months.reversed.take(60))
               ListTile(dense: true, title: Text('${e.key}: ${e.value}')),
             Text(
               'Conversation rhythm',
