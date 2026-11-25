@@ -109,7 +109,7 @@ class _IndexScrollbarState extends State<_IndexScrollbar> {
   /// Rebuilding the 80k-item list on every pointer event is what makes a drag
   /// feel frozen. The thumb follows the pointer locally; actual jumps are
   /// throttled and a final jump is issued when the drag ends.
-  static const _jumpInterval = Duration(milliseconds: 120);
+  static const _jumpInterval = Duration(milliseconds: 180);
 
   int? _preview;
   int? _pending;

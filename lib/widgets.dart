@@ -48,6 +48,7 @@ Future<void> showMsgDetails(
     'From: ${displayName(m.sender)} (export name: ${m.sender})',
     'Time: ${fmtDate(m.t)} ${fmtTime(m.t)}   (${m.t})',
     'Message ID: ${m.id.isEmpty ? '(none found)' : m.id}',
+    if (m.text.isNotEmpty) 'Text: ${m.text}',
     if (note.isNotEmpty) 'Note: $note',
     if (r == null)
       'Reply info: none found in this message (its fields: ${m.raw.keys.join(', ')})'
@@ -457,8 +458,11 @@ class Bubble extends StatelessWidget {
       final hq = regex
           ? (compiledRegex?.firstMatch(m.text)?.group(0) ?? '')
           : query;
+      // Plain Text is much cheaper than SelectableText when a jump rebuilds
+      // a screenful of bubbles. Full selectable text stays available in
+      // Message details.
       out.add(
-        SelectableText.rich(
+        Text.rich(
           TextSpan(
             children: highlightSpans(
               m.text,
@@ -477,7 +481,7 @@ class Bubble extends StatelessWidget {
       out.add(mediaWidget(context, x, fg));
     }
     if (m.share.isNotEmpty) {
-      out.add(SelectableText('🔗 ${m.share}', style: base));
+      out.add(Text('🔗 ${m.share}', style: base));
     }
     if (out.isEmpty) {
       out.add(
@@ -689,9 +693,9 @@ class Bubble extends StatelessWidget {
         children: [
           if (st.showReplies && m.reply != null)
             ReplyQuote(m: m, fg: cs.onSurface, onOpen: onOpenReply),
-          SelectableText.rich(TextSpan(style: base, children: spans)),
+          Text.rich(TextSpan(style: base, children: spans)),
           for (final x in m.media) mediaWidget(context, x, cs.onSurface),
-          if (m.share.isNotEmpty) SelectableText('🔗 ${m.share}', style: base),
+          if (m.share.isNotEmpty) Text('🔗 ${m.share}', style: base),
           if (m.reactions.isNotEmpty)
             Text(
               m.reactions
