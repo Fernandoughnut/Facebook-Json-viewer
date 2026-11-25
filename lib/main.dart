@@ -37,10 +37,11 @@ Future<void> main() async {
   };
   settings.logBreadcrumb('Indexed started');
 
-  // Let the picture cache hold more, so scrolling back over photos does not decode them again.
+  // Keep decoded photos around, but do not let the cache dominate RAM in debug
+  // builds that already hold tens of thousands of messages.
   final cache = PaintingBinding.instance.imageCache;
-  cache.maximumSizeBytes = 400 << 20;
-  cache.maximumSize = 3000;
+  cache.maximumSizeBytes = 160 << 20;
+  cache.maximumSize = 1200;
 
   runApp(ViewerApp(settings: settings));
 }

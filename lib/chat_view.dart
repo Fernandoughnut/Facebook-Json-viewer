@@ -67,6 +67,22 @@ class _BucketBuilder {
   _BucketBuilder(this.t, this.label);
 }
 
+/// Flutter adds a pixel-based scrollbar to every scrollable on Linux. That is
+/// dangerous for a conversation with tens of thousands of variable-height
+/// bubbles: dragging the thumb makes the sliver lay out every earlier message
+/// just to find the offset, which can freeze or abort the process. The chat
+/// uses the activity rail (index-based jumps) instead of that scrollbar.
+class _NoDesktopScrollbar extends ScrollBehavior {
+  const _NoDesktopScrollbar();
+
+  @override
+  Widget buildScrollbar(
+    BuildContext context,
+    Widget child,
+    ScrollableDetails details,
+  ) => child;
+}
+
 class ChatView extends StatefulWidget {
   final Store store;
   final Chat chat;
@@ -124,6 +140,8 @@ class _ChatViewState extends State<ChatView> {
   int?
   _pendingJump; // target from global search, applied after the list is laid out
   bool _jumpScheduled = false;
+  int? _queuedJump; // coalesced index jump (rail / search results)
+  bool _queuedJumpScheduled = false;
   Timer? _hlTimer;
   Timer? _searchTimer;
   RegExp? _compiledRegex;
@@ -439,6 +457,15 @@ class _ChatViewState extends State<ChatView> {
     if (top == null || top >= view.length) return;
     final t = view[top].t;
     if (t == null) return;
+    // Keep the activity rail's highlight in step with ordinary scrolling, so
+    // it works as a safe, index-based replacement for the desktop scrollbar.
+    if (settings.showActivityRail) {
+      final label = _monthKey(t);
+      final bucket = _activityBuckets().indexWhere((b) => b.label == label);
+      if (bucket >= 0 && bucket != _railBucket) {
+        setState(() => _railBucket = bucket);
+      }
+    }
     if (_lastSavedPosT == t || settings.chatPos[widget.chat.key] == t) {
       _lastSavedPosT = t;
       return;
@@ -1692,6 +1719,28 @@ class _ChatViewState extends State<ChatView> {
     });
   }
 
+  /// Queue an index-based jump. Rapid rail scrubs overwrite the previous
+  /// target, so at most one list rebuild happens per frame.
+  void _queueJump(int idx) {
+    _queuedJump = idx;
+    if (_queuedJumpScheduled) return;
+    _queuedJumpScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _queuedJumpScheduled = false;
+      final target = _queuedJump;
+      _queuedJump = null;
+      if (target == null || !mounted || !scroll.isAttached || view.isEmpty) {
+        return;
+      }
+      scroll.jumpTo(
+        index: (_reversed ? view.length - 1 - target : target)
+            .clamp(0, view.length - 1)
+            .toInt(),
+        alignment: 0.35,
+      );
+    });
+  }
+
   /// Scroll the conversation to message [idx] (an index into [view]) and flash it.
   void jumpToMessage(int idx) {
     setState(() {
@@ -1703,13 +1752,7 @@ class _ChatViewState extends State<ChatView> {
     _hlTimer = Timer(const Duration(seconds: 3), () {
       if (mounted) setState(() => highlight = null);
     });
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !scroll.isAttached || view.isEmpty) return;
-      scroll.jumpTo(
-        index: _reversed ? view.length - 1 - idx : idx,
-        alignment: 0.35,
-      );
-    });
+    _queueJump(idx);
   }
 
   /// Show every message that replied to this one, then jump to the chosen one.
@@ -2183,60 +2226,68 @@ class _ChatViewState extends State<ChatView> {
     final rev = _reversed;
     final n = view.length;
     final initial = rev ? 0 : (_restoreIndex ?? 0);
-    return ScrollablePositionedList.builder(
-      key: ValueKey('$_listGen-$rev'),
-      itemScrollController: scroll,
-      itemPositionsListener: positions,
-      reverse: rev,
-      initialScrollIndex: initial,
-      padding: const EdgeInsets.all(8),
-      itemCount: n,
-      itemBuilder: (context, i) {
-        final idx = rev ? n - 1 - i : i;
-        final m = view[idx];
-        final prev = idx > 0 ? view[idx - 1] : null;
-        final newDay = dateSort && (prev == null || !sameDay(prev.t, m.t));
-        final showName =
-            !dateSort || prev == null || prev.sender != m.sender || newDay;
-        final mine = widget.store.me.isNotEmpty && m.sender == widget.store.me;
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            if (newDay)
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                child: Center(
-                  child: Text(
-                    fmtDate(m.t),
-                    style: Theme.of(context).textTheme.bodySmall,
+    return ScrollConfiguration(
+      behavior: const _NoDesktopScrollbar(),
+      child: ScrollablePositionedList.builder(
+        key: ValueKey('$_listGen-$rev'),
+        itemScrollController: scroll,
+        itemPositionsListener: positions,
+        reverse: rev,
+        initialScrollIndex: initial,
+        padding: const EdgeInsets.all(8),
+        // Bubbles hold no state worth keeping. Let the sliver recycle them as
+        // soon as they leave the cache extent instead of retaining every item
+        // visited during a long scroll.
+        addAutomaticKeepAlives: false,
+        itemCount: n,
+        itemBuilder: (context, i) {
+          final idx = rev ? n - 1 - i : i;
+          final m = view[idx];
+          final prev = idx > 0 ? view[idx - 1] : null;
+          final newDay = dateSort && (prev == null || !sameDay(prev.t, m.t));
+          final showName =
+              !dateSort || prev == null || prev.sender != m.sender || newDay;
+          final mine =
+              widget.store.me.isNotEmpty && m.sender == widget.store.me;
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (newDay)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  child: Center(
+                    child: Text(
+                      fmtDate(m.t),
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
                   ),
                 ),
+              Bubble(
+                m: m,
+                mine: mine,
+                showName: showName,
+                showDate: !dateSort,
+                store: widget.store,
+                chat: widget.chat,
+                query: query,
+                regex: useRegex,
+                caseSensitive: caseSensitive,
+                compiledRegex: _compiledRegex,
+                highlighted: highlight == idx,
+                bookmarked: widget.store.isBookmarked(widget.chat, m),
+                onToggleBookmark: () =>
+                    widget.store.toggleBookmark(widget.chat, m),
+                selected: selection.contains(m),
+                onSelect: selecting ? () => toggleSelect(m) : null,
+                replyCount: widget.store.replyCount(m),
+                onShowReplies: () => showReplies(m),
+                onPic: openPicByPath,
+                onOpenReply: openReply,
               ),
-            Bubble(
-              m: m,
-              mine: mine,
-              showName: showName,
-              showDate: !dateSort,
-              store: widget.store,
-              chat: widget.chat,
-              query: query,
-              regex: useRegex,
-              caseSensitive: caseSensitive,
-              compiledRegex: _compiledRegex,
-              highlighted: highlight == idx,
-              bookmarked: widget.store.isBookmarked(widget.chat, m),
-              onToggleBookmark: () =>
-                  widget.store.toggleBookmark(widget.chat, m),
-              selected: selection.contains(m),
-              onSelect: selecting ? () => toggleSelect(m) : null,
-              replyCount: widget.store.replyCount(m),
-              onShowReplies: () => showReplies(m),
-              onPic: openPicByPath,
-              onOpenReply: openReply,
-            ),
-          ],
-        );
-      },
+            ],
+          );
+        },
+      ),
     );
   }
 
