@@ -38,6 +38,9 @@ The format is based on Keep a Changelog, and versions follow Semantic Versioning
   the whole chat's media references.
 - People filters now open in their own dialog instead of pushing the search bar
   down. The eye icon opens the dialog from either the full or collapsed header.
+- Copy and bookmark actions moved from every message bubble into Message
+  details (right-click / long-press / click the time). Consecutive messages from
+  the same sender now use tighter vertical spacing.
 
 ### Fixed
 

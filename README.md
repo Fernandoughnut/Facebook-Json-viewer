@@ -19,9 +19,9 @@ Built with Flutter. Linux works today; Android builds should work with the file-
 - Sort messages by date (either direction), sender, longest messages, most reactions, messages with media, or **grouped threads**.
 - **Jump to date** picks a day and scrolls straight to it.
 - Replies: a message that replies to another shows a quoted block ("Replying to …"); click it to jump to the original. A bookmark-shaped reply icon also shows **all replies to a message** and lets you jump to one.
-- "Message details": right-click a message on Linux, long-press it on Android, or click its time to see the original JSON, reply info, and its note. A copy button on each message, and **Copy text** in Message details, copy just the message text.
+- "Message details": right-click a message on Linux, long-press it on Android, or click its time to see the original JSON, reply info and note, plus **Copy text**, **Copy JSON** and the bookmark toggle. Copy and bookmark buttons are no longer attached to every bubble, so consecutive messages from the same person sit closer together.
 - **Conversation context menu**: right-click (or long-press) a conversation to archive/unarchive it, see details, copy its name or participant names, clear its reading position, or remove it from the app. Archived chats can be shown from the sidebar toolbar; removed chats are skipped on future imports, and the original JSON file is never deleted.
-- Optional bookmarks and notes per message. Notes are searchable from the **Tools → Saved** tab.
+- Optional bookmarks and notes per message, both managed in Message details. Notes are searchable from the **Tools → Saved** tab.
 - A floating date pill at the top of the message list follows your scroll position and shows the date of the messages in the middle of the view. Turn it off in Settings → Search results panel if you prefer a clean view.
 - Auto-hide chat header (on by default): scrolling down collapses search into a slim strip with a search pill and the people-filter eye; scrolling up restores the full header. Both controls work on Linux and Android.
 - With **Show time once per minute** (on by default), only the last message in a busy minute shows a timestamp. The month activity rail and the right-side position bar can each be hidden in Settings or the chat menu.

@@ -2783,6 +2783,8 @@ class _ChatViewState extends State<ChatView> {
           final newDay = dateSort && (prev == null || !sameDay(prev.t, m.t));
           final showName =
               !dateSort || prev == null || prev.sender != m.sender || newDay;
+          final tight =
+              dateSort && prev != null && !newDay && prev.sender == m.sender;
           // Only the last message in a run from the same minute carries a
           // timestamp. `view` stays chronological even when displayed in
           // reverse, so the right message keeps its time either way.
@@ -2812,6 +2814,7 @@ class _ChatViewState extends State<ChatView> {
                 showName: showName,
                 showDate: !dateSort,
                 showTime: showTime,
+                tight: tight,
                 store: widget.store,
                 chat: widget.chat,
                 query: query,
@@ -2819,9 +2822,6 @@ class _ChatViewState extends State<ChatView> {
                 caseSensitive: caseSensitive,
                 compiledRegex: _compiledRegex,
                 highlighted: highlight == idx,
-                bookmarked: widget.store.isBookmarked(widget.chat, m),
-                onToggleBookmark: () =>
-                    widget.store.toggleBookmark(widget.chat, m),
                 selected: selection.contains(m),
                 onSelect: selecting ? () => toggleSelect(m) : null,
                 replyCount: widget.store.replyCount(m),

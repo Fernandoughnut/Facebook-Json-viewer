@@ -43,98 +43,141 @@ Future<void> showMsgDetails(
     json = '(cannot show: $e)';
   }
   final r = m.reply;
-  final note = store?.noteFor(chat, m) ?? '';
-  final lines = <String>[
-    'From: ${displayName(m.sender)} (export name: ${m.sender})',
-    'Time: ${fmtDate(m.t)} ${fmtTime(m.t)}   (${m.t})',
-    'Message ID: ${m.id.isEmpty ? '(none found)' : m.id}',
-    if (m.text.isNotEmpty) 'Text: ${m.text}',
-    if (note.isNotEmpty) 'Note: $note',
-    if (r == null)
-      'Reply info: none found in this message (its fields: ${m.raw.keys.join(', ')})'
-    else
-      'Replies to: ${m.replyTarget != null ? 'found in this conversation (${m.replyTarget!.sender})' : 'not found in this conversation'}'
-          '${r.id.isNotEmpty ? ', id ${r.id}' : ''}',
-  ];
   return showDialog<void>(
     context: context,
-    builder: (ctx) => AlertDialog(
-      title: const Text('Message details'),
-      content: SizedBox(
-        width: math.max(
+    builder: (ctx) => StatefulBuilder(
+      builder: (ctx, setDialogState) {
+        final note = store?.noteFor(chat, m) ?? '';
+        final bookmarked = store?.isBookmarked(chat, m) ?? false;
+        final lines = <String>[
+          'From: ${displayName(m.sender)} (export name: ${m.sender})',
+          'Time: ${fmtDate(m.t)} ${fmtTime(m.t)}   (${m.t})',
+          'Message ID: ${m.id.isEmpty ? '(none found)' : m.id}',
+          if (m.text.isNotEmpty) 'Text: ${m.text}',
+          if (note.isNotEmpty) 'Note: $note',
+          if (r == null)
+            'Reply info: none found in this message (its fields: ${m.raw.keys.join(', ')})'
+          else
+            'Replies to: ${m.replyTarget != null ? 'found in this conversation (${m.replyTarget!.sender})' : 'not found in this conversation'}'
+                '${r.id.isNotEmpty ? ', id ${r.id}' : ''}',
+        ];
+        final dialogWidth = math.max(
           240.0,
           math.min(620.0, MediaQuery.sizeOf(ctx).width - 48),
-        ),
-        child: SingleChildScrollView(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              SelectableText(lines.join('\n')),
-              const SizedBox(height: 12),
-              Text(
-                'Original data from the export',
-                style: Theme.of(ctx).textTheme.titleSmall,
-              ),
-              const SizedBox(height: 4),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: Theme.of(ctx).colorScheme.surfaceContainerHighest,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: SelectableText(json, style: monoStyle(ctx)),
-              ),
-            ],
-          ),
-        ),
-      ),
-      actions: [
-        if (store != null)
-          TextButton(
-            onPressed: () async {
-              final ctrl = TextEditingController(text: note);
-              final ok = await showDialog<bool>(
-                context: ctx,
-                builder: (nctx) => AlertDialog(
-                  title: const Text('Note for this message'),
-                  content: TextField(
-                    controller: ctrl,
-                    maxLines: 4,
-                    autofocus: true,
+        );
+        return AlertDialog(
+          title: const Text('Message details'),
+          content: SizedBox(
+            width: dialogWidth,
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SelectableText(lines.join('\n')),
+                  const SizedBox(height: 12),
+                  Text(
+                    'Original data from the export',
+                    style: Theme.of(ctx).textTheme.titleSmall,
                   ),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.pop(nctx, false),
-                      child: const Text('Cancel'),
+                  const SizedBox(height: 4),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Theme.of(ctx).colorScheme.surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(8),
                     ),
+                    child: SelectableText(json, style: monoStyle(ctx)),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            // Five actions do not fit in one row on a phone, so let them wrap.
+            SizedBox(
+              width: dialogWidth,
+              child: Wrap(
+                alignment: WrapAlignment.end,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                spacing: 4,
+                children: [
+                  if (store != null)
                     TextButton(
-                      onPressed: () => Navigator.pop(nctx, true),
-                      child: const Text('Save'),
+                      onPressed: () async {
+                        final ctrl = TextEditingController(text: note);
+                        final ok = await showDialog<bool>(
+                          context: ctx,
+                          builder: (nctx) => AlertDialog(
+                            title: const Text('Note for this message'),
+                            content: TextField(
+                              controller: ctrl,
+                              maxLines: 4,
+                              autofocus: true,
+                            ),
+                            actions: [
+                              TextButton(
+                                onPressed: () => Navigator.pop(nctx, false),
+                                child: const Text('Cancel'),
+                              ),
+                              TextButton(
+                                onPressed: () => Navigator.pop(nctx, true),
+                                child: const Text('Save'),
+                              ),
+                            ],
+                          ),
+                        );
+                        if (ok == true && ctx.mounted) {
+                          store.setNote(chat, m, ctrl.text);
+                          setDialogState(() {});
+                        }
+                        ctrl.dispose();
+                      },
+                      child: Text(note.isEmpty ? 'Add note' : 'Edit note'),
                     ),
-                  ],
-                ),
-              );
-              if (ok == true && ctx.mounted) store.setNote(chat, m, ctrl.text);
-              ctrl.dispose();
-            },
-            child: Text(note.isEmpty ? 'Add note' : 'Edit note'),
-          ),
-        if (m.text.isNotEmpty)
-          TextButton(
-            onPressed: () => Clipboard.setData(ClipboardData(text: m.text)),
-            child: const Text('Copy text'),
-          ),
-        TextButton(
-          onPressed: () => Clipboard.setData(ClipboardData(text: json)),
-          child: const Text('Copy JSON'),
-        ),
-        TextButton(
-          onPressed: () => Navigator.pop(ctx),
-          child: const Text('Close'),
-        ),
-      ],
+                  if (store != null)
+                    TextButton.icon(
+                      icon: Icon(
+                        bookmarked ? Icons.bookmark : Icons.bookmark_border,
+                        size: 18,
+                      ),
+                      label: Text(bookmarked ? 'Remove bookmark' : 'Bookmark'),
+                      onPressed: () {
+                        store.toggleBookmark(chat, m);
+                        setDialogState(() {});
+                      },
+                    ),
+                  if (m.text.isNotEmpty)
+                    TextButton(
+                      onPressed: () {
+                        Clipboard.setData(ClipboardData(text: m.text));
+                        if (ctx.mounted) {
+                          ScaffoldMessenger.of(ctx).showSnackBar(
+                            const SnackBar(
+                              content: Text('Message text copied'),
+                              duration: Duration(seconds: 1),
+                            ),
+                          );
+                        }
+                      },
+                      child: const Text('Copy text'),
+                    ),
+                  TextButton(
+                    onPressed: () =>
+                        Clipboard.setData(ClipboardData(text: json)),
+                    child: const Text('Copy JSON'),
+                  ),
+                  TextButton(
+                    onPressed: () => Navigator.pop(ctx),
+                    child: const Text('Close'),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        );
+      },
     ),
   );
 }
@@ -343,6 +386,7 @@ class Bubble extends StatelessWidget {
   final bool showName;
   final bool showDate; // put the date next to the time (used when messages are not in date order)
   final bool showTime; // false for earlier messages in the same minute
+  final bool tight; // consecutive message from the same sender
   final Store store;
   final Chat chat;
   final String query;
@@ -352,8 +396,6 @@ class Bubble extends StatelessWidget {
   final bool highlighted;
   final void Function(String path) onPic;
   final void Function(Msg target) onOpenReply;
-  final bool bookmarked;
-  final VoidCallback? onToggleBookmark;
   final bool selected;
   final VoidCallback? onSelect;
   final int replyCount;
@@ -366,6 +408,7 @@ class Bubble extends StatelessWidget {
     required this.showName,
     required this.showDate,
     this.showTime = true,
+    this.tight = false,
     required this.store,
     required this.chat,
     required this.query,
@@ -375,8 +418,6 @@ class Bubble extends StatelessWidget {
     this.compiledRegex,
     required this.onPic,
     required this.onOpenReply,
-    this.bookmarked = false,
-    this.onToggleBookmark,
     this.selected = false,
     this.onSelect,
     this.replyCount = 0,
@@ -390,26 +431,6 @@ class Bubble extends StatelessWidget {
 
   void details(BuildContext context) =>
       showMsgDetails(context, m, chat, store: store);
-
-  void copyText(BuildContext context) {
-    if (m.text.isEmpty) return;
-    Clipboard.setData(ClipboardData(text: m.text));
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Message text copied'),
-        duration: Duration(seconds: 1),
-      ),
-    );
-  }
-
-  Widget copyButton(BuildContext context) => IconButton(
-    padding: EdgeInsets.zero,
-    constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
-    iconSize: 14,
-    tooltip: 'Copy message text',
-    icon: const Icon(Icons.copy, size: 14),
-    onPressed: () => copyText(context),
-  );
 
   Widget mediaWidget(BuildContext context, Media x, Color fg) {
     final label = x.kind.replaceAll('_', ' ');
@@ -531,46 +552,33 @@ class Bubble extends StatelessWidget {
     // Hidden-by-grouping is different from "showTimes is off": don't replace
     // the suppressed time with an info icon, or the row stays just as cluttered.
     final groupedAway = !showTime && wantsStamp;
+    final hasReplies = replyCount > 0 && onShowReplies != null;
+    if (groupedAway && !hasReplies) return const SizedBox.shrink();
+    final children = <Widget>[
+      if (!groupedAway)
+        Tooltip(
+          message: 'Message details',
+          child: InkWell(
+            onTap: () => details(context),
+            onLongPress: () => details(context),
+            child: showStamp
+                ? Text(stamp, style: style)
+                : Icon(Icons.info_outline, size: 12, color: style?.color),
+          ),
+        ),
+      if (hasReplies)
+        IconButton(
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
+          iconSize: 14,
+          tooltip: 'Show $replyCount repl${replyCount == 1 ? 'y' : 'ies'}',
+          icon: Icon(Icons.reply_all, color: style?.color),
+          onPressed: onShowReplies,
+        ),
+    ];
     return Padding(
       padding: const EdgeInsets.fromLTRB(8, 1, 8, 0),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (!groupedAway)
-            Tooltip(
-              message: 'Message details',
-              child: InkWell(
-                onTap: () => details(context),
-                onLongPress: () => details(context),
-                child: showStamp
-                    ? Text(stamp, style: style)
-                    : Icon(Icons.info_outline, size: 12, color: style?.color),
-              ),
-            ),
-          if (m.text.isNotEmpty) copyButton(context),
-          if (onToggleBookmark != null)
-            IconButton(
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
-              iconSize: 14,
-              tooltip: bookmarked ? 'Remove bookmark' : 'Bookmark this message',
-              icon: Icon(
-                bookmarked ? Icons.bookmark : Icons.bookmark_border,
-                color: style?.color,
-              ),
-              onPressed: onToggleBookmark,
-            ),
-          if (replyCount > 0 && onShowReplies != null)
-            IconButton(
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
-              iconSize: 14,
-              tooltip: 'Show $replyCount repl${replyCount == 1 ? 'y' : 'ies'}',
-              icon: Icon(Icons.reply_all, color: style?.color),
-              onPressed: onShowReplies,
-            ),
-        ],
-      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: children),
     );
   }
 
@@ -617,7 +625,11 @@ class Bubble extends StatelessWidget {
     return Align(
       alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
       child: Padding(
-        padding: EdgeInsets.symmetric(vertical: compact ? 2 : 4),
+        // Consecutive messages from one sender sit closer together; a new
+        // sender (or a new day) keeps the roomier gap so groups stay readable.
+        padding: EdgeInsets.symmetric(
+          vertical: tight ? (compact ? 0.5 : 1.5) : (compact ? 2 : 4),
+        ),
         child: Column(
           crossAxisAlignment: mine
               ? CrossAxisAlignment.end
@@ -711,7 +723,7 @@ class Bubble extends StatelessWidget {
     }
 
     return Container(
-      margin: const EdgeInsets.symmetric(vertical: 2),
+      margin: EdgeInsets.symmetric(vertical: tight ? 0 : 2),
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: selected
           ? BoxDecoration(
@@ -731,15 +743,7 @@ class Bubble extends StatelessWidget {
         children: [
           if (st.showReplies && m.reply != null)
             ReplyQuote(m: m, fg: cs.onSurface, onOpen: onOpenReply),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: Text.rich(TextSpan(style: base, children: spans)),
-              ),
-              if (m.text.isNotEmpty) copyButton(context),
-            ],
-          ),
+          Text.rich(TextSpan(style: base, children: spans)),
           for (final x in m.media) mediaWidget(context, x, cs.onSurface),
           if (m.share.isNotEmpty) Text('🔗 ${m.share}', style: base),
           if (m.reactions.isNotEmpty)
