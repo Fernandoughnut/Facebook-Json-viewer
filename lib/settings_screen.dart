@@ -645,6 +645,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
         value: settings.showActivityRail,
         onChanged: (v) => settings.update(() => settings.showActivityRail = v),
       ),
+      SwitchListTile(
+        contentPadding: EdgeInsets.zero,
+        title: const Text('Floating date in chats'),
+        subtitle: const Text(
+          'A small pill at the top of the message list shows the date of the messages you are scrolling through.',
+        ),
+        value: settings.showDatePill,
+        onChanged: (v) => settings.update(() => settings.showDatePill = v),
+      ),
+      SwitchListTile(
+        contentPadding: EdgeInsets.zero,
+        title: const Text('Auto-hide chat header'),
+        subtitle: const Text(
+          'Scrolling down collapses the search and filter row to a slim strip. The people-filter eye stays available, and scrolling up brings it back.',
+        ),
+        value: settings.autoHideTopBar,
+        onChanged: (v) => settings.update(() => settings.autoHideTopBar = v),
+      ),
 
       // ---------------- performance ----------------
       section(

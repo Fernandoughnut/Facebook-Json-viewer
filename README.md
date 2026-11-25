@@ -22,6 +22,8 @@ Built with Flutter. Linux works today; Android builds should work with the file-
 - "Message details": right-click a message (or click its time) to see the original JSON, reply info, and its note. A copy button on each message, and **Copy text** in Message details, copy just the message text.
 - **Conversation context menu**: right-click (or long-press) a conversation to archive/unarchive it, see details, copy its name or participant names, clear its reading position, or remove it from the app. Archived chats can be shown from the sidebar toolbar; removed chats are skipped on future imports, and the original JSON file is never deleted.
 - Optional bookmarks and notes per message. Notes are searchable from the **Tools → Saved** tab.
+- A floating date pill at the top of the message list follows your scroll position and shows the date of the messages in the middle of the view. Turn it off in Settings → Search results panel if you prefer a clean view.
+- Auto-hide chat header (on by default): scrolling down collapses search and filters into a slim strip with a search pill and the people-filter eye; scrolling up restores the full header. Both controls work on Linux and Android.
 - `Ctrl+F` jumps to the search box; `Ctrl/⌘ K` opens the command palette, and `?` shows the shortcut sheet.
 - The command palette searches every action and open conversation, so advanced features do not need permanent toolbar buttons. In Material 3 mode it uses an M3 search field and rounded, icon-backed result rows.
 
@@ -44,7 +46,7 @@ Built with Flutter. Linux works today; Android builds should work with the file-
 - Photos are matched to messages by the file name written in the JSON. The exported files have random names like `0a9ad60f-e5cc-….jpeg`, so you never need to rename anything.
 - Media folders: a **shared** folder that serves every conversation, and/or folders for **one conversation** only (checked first, then the shared ones).
 - Media info dialog per conversation: how many files are referenced, how many were found (and in which kind of folder), and the names of the missing ones.
-- On Android, where a folder pick returns a `content://` handle, the app falls back to selecting the media files and copies them into a temporary folder for the current session.
+- On Android, the media button opens the system folder picker. Because a `content://` tree cannot be read with `dart:io`, Indexed streams the folder's photos and videos into app-private storage first, with a live progress/cancel dialog, then indexes that copy. Re-picking the same folder reuses the files already copied.
 
 ### Export and performance
 

@@ -345,6 +345,14 @@ class _ChatViewState extends State<ChatView> {
   final ValueNotifier<int> _scrollTop = ValueNotifier(0);
   final ValueNotifier<int> _visibleCount = ValueNotifier(10);
 
+  /// Date of the message in the middle of the viewport, for the floating pill.
+  final ValueNotifier<int?> _centerTime = ValueNotifier(null);
+
+  /// Whether the search/filter header is collapsed into its slim strip.
+  final ValueNotifier<bool> _topBarHidden = ValueNotifier(false);
+  double? _lastScrollPixels;
+  int _ignoreScrollUntil = 0;
+
   AppSettings get settings => widget.store.settings;
   String get query => qc.text.trim();
   String get _findHint =>
@@ -430,6 +438,8 @@ class _ChatViewState extends State<ChatView> {
     _railBucket.dispose();
     _scrollTop.dispose();
     _visibleCount.dispose();
+    _centerTime.dispose();
+    _topBarHidden.dispose();
     super.dispose();
   }
 
@@ -638,6 +648,8 @@ class _ChatViewState extends State<ChatView> {
     positions.itemPositions.addListener(_onPositions);
     _railScrubIdx = null;
     _railDragging = false;
+    _centerTime.value = null;
+    _lastScrollPixels = null;
     _listGen++;
   }
 
@@ -658,6 +670,9 @@ class _ChatViewState extends State<ChatView> {
     if (_scrollTop.value != top) _scrollTop.value = top;
     final visible = (bottom ?? top) - top + 1;
     if (_visibleCount.value != visible) _visibleCount.value = visible;
+    // Middle of the visible range: the date the reader is actually looking at.
+    final mid = view[(top + (bottom ?? top)) ~/ 2].t;
+    if (_centerTime.value != mid) _centerTime.value = mid;
     // _scrollTop is the oldest visible index (used by the index scrollbar),
     // but the message at the visual top is the newest one in a reversed or
     // newest-first view. That is the timestamp worth highlighting/restoring.
@@ -683,6 +698,136 @@ class _ChatViewState extends State<ChatView> {
     settings.chatPos[widget.chat.key] = t;
     _lastSavedPosT = t;
     settings.save();
+  }
+
+  // ---------- header that follows the scroll ----------
+
+  bool _onScrollNotification(ScrollNotification n) {
+    if (!settings.autoHideTopBar) return false;
+    if (n is! ScrollUpdateNotification && n is! ScrollEndNotification) {
+      return false;
+    }
+    // The query and selection controls live in the header. Never collapse it
+    // while the reader is using them.
+    if (query.isNotEmpty || searchFocus.hasFocus || selecting) return false;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final pixels = n.metrics.pixels;
+    final prev = _lastScrollPixels;
+    _lastScrollPixels = pixels;
+    if (now < _ignoreScrollUntil || prev == null) return false;
+    final delta = pixels - prev;
+    if (pixels <= 96) {
+      if (_topBarHidden.value) _topBarHidden.value = false;
+    } else if (delta > 2) {
+      if (!_topBarHidden.value) _topBarHidden.value = true;
+    } else if (delta < -2) {
+      if (_topBarHidden.value) _topBarHidden.value = false;
+    } else {
+      return false;
+    }
+    // Collapsing changes the viewport height, which moves the scroll position
+    // again. Ignore that echo so the header cannot oscillate.
+    _ignoreScrollUntil = now + 250;
+    _lastScrollPixels = null;
+    return false;
+  }
+
+  /// Slim replacement for the search/filter header. The people-filter eye
+  /// stays here so it is never hidden while scrolling.
+  Widget _compactTopBar() {
+    final cs = Theme.of(context).colorScheme;
+    final m3 = Theme.of(context).useMaterial3;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
+      decoration: BoxDecoration(
+        border: Border(
+          bottom: BorderSide(color: cs.outlineVariant.withValues(alpha: 0.5)),
+        ),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Material(
+              color: m3 ? cs.surfaceContainerHigh : cs.surface,
+              borderRadius: BorderRadius.circular(20),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(20),
+                onTap: () {
+                  _topBarHidden.value = false;
+                  searchFocus.requestFocus();
+                },
+                child: SizedBox(
+                  height: 38,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.search,
+                          size: 18,
+                          color: cs.onSurfaceVariant,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Search messages',
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(color: cs.onSurfaceVariant),
+                          ),
+                        ),
+                        if (hasActiveFilters)
+                          Icon(Icons.filter_list, size: 16, color: cs.primary),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 2),
+          _peopleFilterToggle(),
+          IconButton(
+            tooltip: 'Show search and filters',
+            visualDensity: VisualDensity.compact,
+            constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+            padding: EdgeInsets.zero,
+            icon: const Icon(Icons.expand_more, size: 18),
+            onPressed: () => _topBarHidden.value = false,
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Date of the message under the reader's eye, as a floating chip.
+  Widget _datePill() {
+    final cs = Theme.of(context).colorScheme;
+    return ValueListenableBuilder<int?>(
+      valueListenable: _centerTime,
+      builder: (context, t, _) {
+        if (t == null) return const SizedBox.shrink();
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+          decoration: BoxDecoration(
+            color: cs.surfaceContainerHighest.withValues(alpha: 0.94),
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: cs.outlineVariant.withValues(alpha: 0.5)),
+            boxShadow: [
+              BoxShadow(
+                color: cs.shadow.withValues(alpha: 0.16),
+                blurRadius: 8,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
+          child: Text(
+            fmtDate(t),
+            style: Theme.of(context).textTheme.labelMedium
+                ?.copyWith(color: cs.onSurface, fontWeight: FontWeight.w600),
+          ),
+        );
+      },
+    );
   }
 
   // ---------- photos ----------
@@ -2306,50 +2451,110 @@ class _ChatViewState extends State<ChatView> {
             autofocus: true,
             child: Column(
               children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
-                  child: _searchToolbar(panelToggle, overflowMenu),
+                ValueListenableBuilder<bool>(
+                  valueListenable: _topBarHidden,
+                  builder: (context, hidden, _) {
+                    final full = !settings.autoHideTopBar || !hidden;
+                    return AnimatedSize(
+                      duration: const Duration(milliseconds: 180),
+                      curve: Curves.easeOut,
+                      alignment: Alignment.topCenter,
+                      child: full
+                          ? Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Padding(
+                                  padding: const EdgeInsets.fromLTRB(
+                                    8,
+                                    8,
+                                    8,
+                                    0,
+                                  ),
+                                  child: _searchToolbar(
+                                    panelToggle,
+                                    overflowMenu,
+                                  ),
+                                ),
+                                if (settings.showPeopleFilters)
+                                  settings.material3
+                                      ? materialFilterBar(
+                                          senders,
+                                          s,
+                                          activePreset,
+                                          panelVisible,
+                                        )
+                                      : legacyFilterBar(
+                                          senders,
+                                          s,
+                                          activePreset,
+                                          panelVisible,
+                                        )
+                                else
+                                  Padding(
+                                    padding: const EdgeInsets.fromLTRB(
+                                      8,
+                                      0,
+                                      8,
+                                      8,
+                                    ),
+                                    child: _filterFooter(
+                                      activePreset,
+                                      panelVisible,
+                                    ),
+                                  ),
+                                const Divider(height: 1),
+                              ],
+                            )
+                          : _compactTopBar(),
+                    );
+                  },
                 ),
-                if (settings.showPeopleFilters)
-                  settings.material3
-                      ? materialFilterBar(
-                          senders,
-                          s,
-                          activePreset,
-                          panelVisible,
-                        )
-                      : legacyFilterBar(senders, s, activePreset, panelVisible)
-                else
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
-                    child: _filterFooter(activePreset, panelVisible),
-                  ),
-                const Divider(height: 1),
                 Expanded(
-                  // The same Row is always used, so the message list is never torn down just
-                  // because the results panel appears next to it.
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      if (settings.showActivityRail &&
-                          !gallery &&
-                          view.isNotEmpty)
-                        activityRail(),
-                      Expanded(child: body),
-                      if (!gallery && !panelFull && view.isNotEmpty) ...[
-                        const VerticalDivider(width: 1),
-                        _IndexScrollbar(
-                          itemCount: view.length,
-                          topIndex: _scrollTop,
-                          visibleCount: _visibleCount,
-                          onJump: scrubTo,
+                  child: NotificationListener<ScrollNotification>(
+                    onNotification: _onScrollNotification,
+                    // The same Row is always used, so the message list is never torn down just
+                    // because the results panel appears next to it.
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        if (settings.showActivityRail &&
+                            !gallery &&
+                            view.isNotEmpty)
+                          activityRail(),
+                        Expanded(
+                          child: Stack(
+                            children: [
+                              Positioned.fill(child: body),
+                              if (!gallery &&
+                                  !panelFull &&
+                                  dateSort &&
+                                  settings.showDatePill)
+                                Positioned(
+                                  top: 8,
+                                  left: 0,
+                                  right: 0,
+                                  child: IgnorePointer(
+                                    child: Center(child: _datePill()),
+                                  ),
+                                ),
+                            ],
+                          ),
                         ),
+                        if (!gallery && !panelFull && view.isNotEmpty) ...[
+                          const VerticalDivider(width: 1),
+                          _IndexScrollbar(
+                            itemCount: view.length,
+                            topIndex: _scrollTop,
+                            visibleCount: _visibleCount,
+                            onJump: scrubTo,
+                          ),
+                        ],
+                        if (panelSide) ...[
+                          const VerticalDivider(width: 1),
+                          SizedBox(width: 360, child: resultsPanel()),
+                        ],
                       ],
-                      if (panelSide) ...[
-                        const VerticalDivider(width: 1),
-                        SizedBox(width: 360, child: resultsPanel()),
-                      ],
-                    ],
+                    ),
                   ),
                 ),
               ],

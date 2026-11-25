@@ -201,4 +201,27 @@ void main() {
     final log = File(settings.logPath).readAsStringSync();
     expect(log, contains('[breadcrumb] opened a chat'));
   });
+
+  test('floating date and auto-hide header persist', () async {
+    final dir = await Directory.systemTemp.createTemp('indexed_chrome_test_');
+    addTearDown(() {
+      if (dir.existsSync()) dir.deleteSync(recursive: true);
+    });
+
+    final settings = AppSettings(configDir: dir.path);
+    addTearDown(settings.dispose);
+    await settings.load();
+
+    expect(settings.showDatePill, isTrue);
+    expect(settings.autoHideTopBar, isTrue);
+    settings.showDatePill = false;
+    settings.autoHideTopBar = false;
+    await settings.flush();
+
+    final reloaded = AppSettings(configDir: dir.path);
+    addTearDown(reloaded.dispose);
+    await reloaded.load();
+    expect(reloaded.showDatePill, isFalse);
+    expect(reloaded.autoHideTopBar, isFalse);
+  });
 }

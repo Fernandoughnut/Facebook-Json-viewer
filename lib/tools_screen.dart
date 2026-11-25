@@ -701,7 +701,10 @@ class MediaTab extends StatelessWidget {
   /// Copy found media into a folder with readable names. Originals are never moved,
   /// and the copying itself runs in an isolate.
   Future<void> copyWithReadableNames(BuildContext context) async {
-    final dest = await pickFolder(store);
+    final dest = await pickFolder(
+      store,
+      navigator: Navigator.of(context, rootNavigator: true),
+    );
     if (dest == null || !context.mounted) return;
     final sep = Platform.pathSeparator;
     final baseDir = dest.endsWith(sep)

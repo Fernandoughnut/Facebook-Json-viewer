@@ -12,6 +12,11 @@ The format is based on Keep a Changelog, and versions follow Semantic Versioning
   a universal APK plus split APKs for `arm64-v8a`, `armeabi-v7a` and `x86_64`,
   each with a SHA-256 checksum.
 - `CHANGELOG.md` tracking notable changes.
+- A floating date pill in chats shows the date of the messages in the middle of
+  the viewport while scrolling (on Linux and Android).
+- Optional auto-hide header: scrolling down collapses search and filters into a
+  slim strip with a search pill, the people-filter eye and an expand button.
+  The people-filter eye is always available.
 
 ### Changed
 
@@ -22,7 +27,11 @@ The format is based on Keep a Changelog, and versions follow Semantic Versioning
   storage instead of `$HOME/.config` and temporary directories.
 - Android media selection uses the system folder picker again. A native SAF
   bridge streams photos and videos into app storage so large mixed folders can
-  be indexed without gallery multi-select.
+  be indexed without gallery multi-select. The import now shows file-by-file
+  progress and can be cancelled.
+- Android folder imports list files first, use a larger buffer and avoid extra
+  provider queries per file. Re-picking an unchanged folder no longer rescans
+  the whole chat's media references.
 
 ### Fixed
 
@@ -32,6 +41,9 @@ The format is based on Keep a Changelog, and versions follow Semantic Versioning
   switch cannot lose the last settings change.
 - The Android media button no longer opens a photo picker or rejects `content://`
   folder handles; picked folders are imported and persisted across restarts.
+- Android folder imports no longer leave truncated files behind when interrupted,
+  mix up names that sanitize to the same value, or abort everything because one
+  document was unreadable.
 
 Planned next:
 

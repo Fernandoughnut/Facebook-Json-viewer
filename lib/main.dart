@@ -657,7 +657,10 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> pickSharedMedia() async {
-    final dir = await pickFolder(store);
+    final dir = await pickFolder(
+      store,
+      navigator: Navigator.of(context, rootNavigator: true),
+    );
     if (dir != null) await store.addMediaDir(dir);
   }
 

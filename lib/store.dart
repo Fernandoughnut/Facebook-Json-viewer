@@ -470,6 +470,14 @@ class Store extends ChangeNotifier {
 
   /// Open a media folder. With [chat] it belongs to that conversation only;
   /// without it, the folder is shared by every conversation.
+  static bool _sameFileMap(Map<String, String> a, Map<String, String> b) {
+    if (a.length != b.length) return false;
+    for (final e in a.entries) {
+      if (b[e.key] != e.value) return false;
+    }
+    return true;
+  }
+
   Future<void> addMediaDir(
     String dir, {
     Chat? chat,
@@ -489,11 +497,19 @@ class Store extends ChangeNotifier {
     }
     _busy--;
     final list = chat?.dirs ?? sharedDirs;
-    list.removeWhere(
-      (d) => d.path == dir,
-    ); // opening the same folder again just rescans it
-    list.add(MediaDir(dir, files));
-    mediaVersion++;
+    final previous = list.where((d) => d.path == dir);
+    var unchanged = false;
+    for (final d in previous) {
+      // Re-picking the same folder must not invalidate media stats and the
+      // gallery: on a large chat that is a full O(messages) rescan.
+      unchanged = _sameFileMap(d.files, files);
+      break;
+    }
+    if (!unchanged) {
+      list.removeWhere((d) => d.path == dir);
+      list.add(MediaDir(dir, files));
+      mediaVersion++;
+    }
     if (remember) {
       final saved = chat == null
           ? settings.sharedDirs

@@ -119,6 +119,9 @@ class AppSettings extends ChangeNotifier {
   List<SearchPreset> presets = [];
   bool showActivityRail = true;
   bool showPeopleFilters = true; // the "Show messages from" / "I am" row
+  bool showDatePill = true; // small date chip that follows the scroll position
+  bool autoHideTopBar =
+      true; // collapse search/filters while scrolling down a chat
 
   // ---- performance / privacy ----
   bool useParseCache = true; // reuse normalized messages across launches
@@ -375,6 +378,8 @@ class AppSettings extends ChangeNotifier {
     'searchPresets': [for (final p in presets) p.toJson()],
     'showActivityRail': showActivityRail,
     'showPeopleFilters': showPeopleFilters,
+    'showDatePill': showDatePill,
+    'autoHideTopBar': autoHideTopBar,
     'useParseCache': useParseCache,
     'keepRaw': keepRaw,
     'dedupeImports': dedupeImports,
@@ -419,6 +424,8 @@ class AppSettings extends ChangeNotifier {
     resultsNewestFirst = j['resultsNewestFirst'] as bool? ?? resultsNewestFirst;
     showActivityRail = j['showActivityRail'] as bool? ?? showActivityRail;
     showPeopleFilters = j['showPeopleFilters'] as bool? ?? showPeopleFilters;
+    showDatePill = j['showDatePill'] as bool? ?? showDatePill;
+    autoHideTopBar = j['autoHideTopBar'] as bool? ?? autoHideTopBar;
     final presetsJson = j['searchPresets'];
     presets = presetsJson is List
         ? presetsJson

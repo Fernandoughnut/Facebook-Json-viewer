@@ -163,7 +163,10 @@ Future<void> showMediaInfo(BuildContext context, Store store, Chat chat) {
         );
 
         Future<void> add(Chat? owner) async {
-          final dir = await pickFolder(store);
+          final dir = await pickFolder(
+            store,
+            navigator: Navigator.of(ctx, rootNavigator: true),
+          );
           if (dir != null) await store.addMediaDir(dir, chat: owner);
         }
 

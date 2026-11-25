@@ -1,5 +1,6 @@
 // Small helpers shared by the screens.
 
+import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 
@@ -149,7 +150,7 @@ Future<void> openExternal(String path, BuildContext context) async {
 /// Ask for a folder. On desktop this returns the folder directly. On Android,
 /// SAF folder handles are content:// URIs that dart:io cannot walk, so the
 /// native side streams the folder's media into app-private storage first.
-Future<String?> pickFolder(Store store) async {
+Future<String?> pickFolder(Store store, {NavigatorState? navigator}) async {
   if (Platform.isAndroid) {
     final uri = await AndroidFolderPicker.pick();
     if (uri == null) return null;
@@ -158,23 +159,61 @@ Future<String?> pickFolder(Store store) async {
       '${AndroidFolderPicker.folderNameFor(uri)}',
     );
     await dir.create(recursive: true);
-    final result = await AndroidFolderPicker.import(uri, dir.path);
-    final error = result['error'];
-    if (error != null) {
-      store.setStatus('Could not import that folder: $error');
-      return null;
-    }
-    final copied = result['copied'] as int? ?? 0;
-    final skipped = result['skipped'] as int? ?? 0;
-    if (copied == 0 && skipped == 0) {
-      store.setStatus('No photos or videos were found in that folder.');
-      return null;
-    }
-    store.setStatus(
-      'Imported $copied media file(s) from the folder'
-      '${skipped > 0 ? ' ($skipped already present or unreadable)' : ''}.',
+
+    // Streaming thousands of SAF documents takes real time. Show what is
+    // happening instead of leaving the app looking frozen.
+    final progress = ValueNotifier<Map<String, dynamic>>(
+      const <String, dynamic>{},
     );
-    return dir.path;
+    if (navigator != null && navigator.mounted) {
+      unawaited(
+        showDialog<void>(
+          context: navigator.context,
+          barrierDismissible: false,
+          builder: (_) => _FolderImportDialog(progress: progress),
+        ),
+      );
+    }
+    store.setStatus('Importing folder… Large folders can take a few minutes.');
+    Future<void> discard() async {
+      try {
+        await dir.delete(recursive: true);
+      } catch (_) {}
+    }
+
+    try {
+      final result = await AndroidFolderPicker.import(
+        uri,
+        dir.path,
+        onProgress: (p) => progress.value = p,
+      );
+      final error = result['error'];
+      if (error != null) {
+        await discard();
+        store.setStatus('Could not import that folder: $error');
+        return null;
+      }
+      if (result['cancelled'] == true) {
+        await discard();
+        store.setStatus('Folder import cancelled.');
+        return null;
+      }
+      final copied = result['copied'] as int? ?? 0;
+      final skipped = result['skipped'] as int? ?? 0;
+      if (copied == 0 && skipped == 0) {
+        await discard();
+        store.setStatus('No photos or videos were found in that folder.');
+        return null;
+      }
+      store.setStatus(
+        'Imported $copied media file(s) from the folder'
+        '${skipped > 0 ? ' ($skipped already present or unreadable)' : ''}.',
+      );
+      return dir.path;
+    } finally {
+      if (navigator != null && navigator.mounted) navigator.pop();
+      progress.dispose();
+    }
   }
 
   Uri? uri;
@@ -190,6 +229,67 @@ Future<String?> pickFolder(Store store) async {
     );
   }
   return null;
+}
+
+class _FolderImportDialog extends StatelessWidget {
+  final ValueNotifier<Map<String, dynamic>> progress;
+  const _FolderImportDialog({required this.progress});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return PopScope<Object?>(
+      canPop: false,
+      child: AlertDialog(
+        title: const Text('Importing media folder'),
+        content: ValueListenableBuilder<Map<String, dynamic>>(
+          valueListenable: progress,
+          builder: (context, p, _) {
+            final total = p['total'] as int? ?? 0;
+            final current = p['current'] as int? ?? 0;
+            final copied = p['copied'] as int? ?? 0;
+            final name = p['name'] as String?;
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                LinearProgressIndicator(
+                  value: total > 0 ? current / total : null,
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  total > 0
+                      ? '$current of $total files checked'
+                      : 'Listing files in the folder…',
+                ),
+                const SizedBox(height: 4),
+                Text('$copied copied so far'),
+                if (name != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: cs.onSurfaceVariant,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+              ],
+            );
+          },
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => unawaited(AndroidFolderPicker.cancelImport()),
+            child: const Text('Cancel'),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 /// File names from [safeFileName] are used when copying content:// picks.

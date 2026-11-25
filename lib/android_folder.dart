@@ -25,12 +25,25 @@ class AndroidFolderPicker {
     }
   }
 
-  /// Copies the picked tree's media files into [destDir].
-  static Future<Map<String, dynamic>> import(String uri, String destDir) async {
+  /// Copies the picked tree's media files into [destDir]. Progress frames from
+  /// Kotlin are forwarded to [onProgress] while the copy is running.
+  static Future<Map<String, dynamic>> import(
+    String uri,
+    String destDir, {
+    void Function(Map<String, dynamic>)? onProgress,
+  }) async {
+    final importId = DateTime.now().microsecondsSinceEpoch.toString();
+    _channel.setMethodCallHandler((call) async {
+      if (call.method != 'importProgress') return;
+      final args = call.arguments;
+      if (args is Map && args['importId'] == importId) {
+        onProgress?.call(Map<String, dynamic>.from(args));
+      }
+    });
     try {
       final result = await _channel.invokeMapMethod<String, dynamic>(
         'importFolder',
-        {'uri': uri, 'destDir': destDir},
+        {'uri': uri, 'destDir': destDir, 'importId': importId},
       );
       return result ?? <String, dynamic>{};
     } on PlatformException catch (e) {
@@ -39,6 +52,17 @@ class AndroidFolderPicker {
       return <String, dynamic>{
         'error': e.message ?? 'Folder importer unavailable',
       };
+    } finally {
+      _channel.setMethodCallHandler(null);
+    }
+  }
+
+  /// Ask the native importer to stop after the current file.
+  static Future<void> cancelImport() async {
+    try {
+      await _channel.invokeMethod<void>('cancelImport');
+    } catch (_) {
+      // Already cancelled or not on Android.
     }
   }
 
