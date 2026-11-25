@@ -76,6 +76,21 @@ void main() {
     expect(firstIndexAtOrAfter(times, 4000, (x) => x.t), 4);
     expect(firstIndexAtOrAfter(const <_At>[], 0, (x) => x.t), 0);
   });
+
+  test(
+    'firstIndexAtOrAfter also walks newest-first views in reading order',
+    () {
+      final times = [_At(3000), _At(2000), _At(2000), _At(1000)];
+      expect(firstIndexAtOrAfter(times, 2000, (x) => x.t, descending: true), 1);
+      expect(firstIndexAtOrAfter(times, 2500, (x) => x.t, descending: true), 1);
+      expect(firstIndexAtOrAfter(times, 4000, (x) => x.t, descending: true), 0);
+      expect(firstIndexAtOrAfter(times, 500, (x) => x.t, descending: true), 4);
+      expect(
+        firstIndexAtOrAfter(const <_At>[], 0, (x) => x.t, descending: true),
+        0,
+      );
+    },
+  );
 }
 
 class _At {

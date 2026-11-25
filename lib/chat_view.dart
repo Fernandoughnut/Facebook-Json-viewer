@@ -616,22 +616,19 @@ class _ChatViewState extends State<ChatView> {
     return out;
   }
 
-  /// The saved reading position as an index into [view] (first message at or after that time).
+  /// The saved reading position as an index into [view].
   int? _findRestore() {
     // Read the saved position every time: filters/search can rebuild the view
     // after the chat opened, and scrolling may have saved a newer position.
     final t = settings.chatPos[widget.chat.key];
-    if (t == null || sort != SortMode.oldest || view.isEmpty) return null;
-    var lo = 0, hi = view.length;
-    while (lo < hi) {
-      final mid = (lo + hi) >> 1;
-      if ((view[mid].t ?? 0) < t) {
-        lo = mid + 1;
-      } else {
-        hi = mid;
-      }
-    }
-    return lo.clamp(0, view.length - 1).toInt();
+    if (t == null || !dateSort || view.isEmpty) return null;
+    final descending = sort == SortMode.newest;
+    return firstIndexAtOrAfter(
+      view,
+      t,
+      (m) => m.t ?? 0,
+      descending: descending,
+    ).clamp(0, view.length - 1);
   }
 
   void _newList() {
@@ -661,7 +658,11 @@ class _ChatViewState extends State<ChatView> {
     if (_scrollTop.value != top) _scrollTop.value = top;
     final visible = (bottom ?? top) - top + 1;
     if (_visibleCount.value != visible) _visibleCount.value = visible;
-    final t = view[top].t;
+    // _scrollTop is the oldest visible index (used by the index scrollbar),
+    // but the message at the visual top is the newest one in a reversed or
+    // newest-first view. That is the timestamp worth highlighting/restoring.
+    final visualTop = (_reversed || sort == SortMode.newest) ? bottom : top;
+    final t = view[visualTop ?? top].t;
     if (t == null) return;
     // Keep the activity rail's highlight in step with ordinary scrolling, but
     // do not fight the thumb while the user is scrubbing the rail itself.
@@ -757,13 +758,15 @@ class _ChatViewState extends State<ChatView> {
 
   // ---------- export ----------
 
+  Iterable<Msg> _exportMessages(_ExportScope scope) => switch (scope) {
+    _ExportScope.whole => widget.chat.messages,
+    _ExportScope.selected => selection,
+    _ExportScope.view =>
+      (panelMode && query.isNotEmpty) ? results.map((i) => view[i]) : view,
+  };
+
   Future<void> export(_ExportRequest request) async {
-    final Iterable<Msg> msgs = switch (request.scope) {
-      _ExportScope.whole => widget.chat.messages,
-      _ExportScope.selected => selection,
-      _ExportScope.view =>
-        (panelMode && query.isNotEmpty) ? results.map((i) => view[i]) : view,
-    };
+    final Iterable<Msg> msgs = _exportMessages(request.scope);
     final ext = switch (request.format) {
       ExportFormat.json => 'json',
       ExportFormat.csv => 'csv',
@@ -788,11 +791,19 @@ class _ChatViewState extends State<ChatView> {
     };
     final name =
         '${safeFileName(widget.chat.title)}${suffix}_${fmtDate(DateTime.now().millisecondsSinceEpoch)}.$ext';
+    final rawMissing =
+        request.options.includeRaw && !msgs.any((m) => m.raw.isNotEmpty);
     final ok = await saveExport(name, content, mimeType: mime);
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(ok ? 'Saved $name' : 'Export cancelled or failed.'),
+        content: Text(
+          !ok
+              ? 'Export cancelled or failed.'
+              : rawMissing
+              ? 'Saved $name (no original JSON was kept; normalized fields only)'
+              : 'Saved $name',
+        ),
       ),
     );
   }
@@ -874,6 +885,21 @@ class _ChatViewState extends State<ChatView> {
                       ? (v) => setDialog(() => includeRaw = v ?? false)
                       : null,
                 ),
+                if (format == ExportFormat.json &&
+                    includeRaw &&
+                    !_exportMessages(scope).any((m) => m.raw.isNotEmpty))
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Text(
+                      'Original JSON was not kept in memory for this scope. '
+                      'Reopen the export with "Keep original JSON" enabled if you need it; '
+                      'this file will contain only normalized fields.',
+                      style: TextStyle(
+                        color: Theme.of(ctx).colorScheme.error,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
                 CheckboxListTile(
                   dense: true,
                   contentPadding: EdgeInsets.zero,

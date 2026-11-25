@@ -15,11 +15,11 @@ Built with Flutter. Linux works today; Android builds should work with the file-
 - Fixes the garbled accents and emoji that older Facebook exports produce.
 - Chat view with date separators, sender names, reactions, unsent-message markers and a configurable "I am" setting that puts your messages on the right.
 - Three message layouts: **Bubbles**, **Compact**, and **Plain log** (one line per message, like a chat log).
-- Choose where a conversation opens: at the **newest** message, the **oldest** message, or **where you left off**.
+- Choose where a conversation opens: at the **newest** message, the **oldest** message, or **where you left off** (works in both date sort directions).
 - Sort messages by date (either direction), sender, longest messages, most reactions, messages with media, or **grouped threads**.
 - **Jump to date** picks a day and scrolls straight to it.
 - Replies: a message that replies to another shows a quoted block ("Replying to …"); click it to jump to the original. A bookmark-shaped reply icon also shows **all replies to a message** and lets you jump to one.
-- "Message details": right-click a message (or click its time) to see the original JSON, reply info, and its note.
+- "Message details": right-click a message (or click its time) to see the original JSON, reply info, and its note. A copy button on each message, and **Copy text** in Message details, copy just the message text.
 - **Conversation context menu**: right-click (or long-press) a conversation to archive/unarchive it, see details, copy its name or participant names, clear its reading position, or remove it from the app. Archived chats can be shown from the sidebar toolbar; removed chats are skipped on future imports, and the original JSON file is never deleted.
 - Optional bookmarks and notes per message. Notes are searchable from the **Tools → Saved** tab.
 - `Ctrl+F` jumps to the search box; `Ctrl/⌘ K` opens the command palette, and `?` shows the shortcut sheet.
@@ -48,13 +48,13 @@ Built with Flutter. Linux works today; Android builds should work with the file-
 
 ### Export and performance
 
-- Export the whole conversation, the current filtered view, or a multi-selected set of messages from the chat toolbar. One dialog chooses scope, format (JSON / CSV / text) and what to include: original JSON, media, reactions and display names.
+- Export the whole conversation, the current filtered view, or a multi-selected set of messages from the chat toolbar. One dialog chooses scope, format (JSON / CSV / text) and what to include: original JSON, media, reactions and display names. If **Original JSON** is selected but raw data was not kept in memory, the dialog warns before exporting.
 - Clean JSON export (`messages-viewer/1`) omits duplicate raw fields by default; raw data, media and reactions can be included if wanted. CSV always includes media and reactions.
 - Participant aliases change only what you see and export; the original names in the exported JSON are untouched.
 - Overlapping exports are deduplicated by message ID, or by time + sender + text + media when no ID exists.
 - Large files are parsed in a background isolate, so the window does not freeze, and a progress bar shows while files or folders are being read.
 - **Persistent parse cache**: the first launch parses an export, later launches read a normalized cache keyed by file path, size and modified time. Can be cleared or disabled in Settings.
-- **Optional raw retention**: turn off "Keep original JSON in memory" to save a lot of RAM on huge exports (raw JSON will no longer appear in Message details or exports). Exports over 40 MB offer to disable it automatically when opened or restored.
+- **Optional raw retention**: turn off "Keep original JSON in memory" to save a lot of RAM on huge exports (raw JSON will no longer appear in Message details or exports). Exports over 40 MB offer to disable it automatically when opened or restored. The export dialog warns if you ask for original JSON that is no longer in memory.
 - **Cheaper scrolling**: the reading position is written only when the top visible message changes, and timeline month jumps use a cached index instead of rescanning the conversation.
 - Sliders commit once on release, and theme changes only rebuild the root theme widget, so large conversations do not stutter.
 - Media coverage stats are cached until messages or folders change, and reply counts no longer allocate a list for every visible message. Settings are written atomically, and state files skip temporary parse-cache files.
@@ -108,7 +108,16 @@ flutter build linux --release
 
 The executable is `build/linux/x64/release/bundle/indexed`; distribute the whole `bundle` folder, not just the executable.
 
-Pushing a version tag such as `v1.1.0` triggers `.github/workflows/release.yml`: GitHub runs the checks, builds the Linux release bundle, packages it as `Indexed-linux-x64-v1.1.0.tar.gz`, and attaches it to a new GitHub Release with a SHA-256 checksum.
+To build and package that bundle locally:
+
+```bash
+./tool/package_linux.sh                         # indexed-linux-x64.tar.gz
+./tool/package_linux.sh Indexed-linux-x64-v1.1.0.tar.gz
+```
+
+The script builds the release bundle, archives its *contents* with the required trailing `.`, and writes a `.sha256` file beside the archive.
+
+Pushing a version tag such as `v1.1.0` triggers `.github/workflows/release.yml`: GitHub checks that the tag matches `pubspec.yaml`, runs the checks, builds the Linux release bundle, packages it as `Indexed-linux-x64-v1.1.0.tar.gz`, and attaches it to a new GitHub Release with a SHA-256 checksum.
 
 To measure parsing on a synthetic 100k-message export:
 
@@ -146,7 +155,7 @@ dart run tool/generate_large_export.dart 100000 /tmp/opencode/large_export.json
 | `lib/global_search_screen.dart` | Cross-conversation search screen |
 | `lib/tools_screen.dart` | Bookmarks, insights, links and media tools |
 | `test/` | Parser, cache, export and sample-export regression tests |
-| `tool/` | Synthetic large-export generator and benchmark |
+| `tool/` | Synthetic large-export generator/benchmark and `package_linux.sh` |
 
 ## Current limitations
 

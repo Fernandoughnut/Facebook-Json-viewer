@@ -45,6 +45,17 @@ jobs:
           flutter analyze
           flutter test
 
+      - name: Verify tag matches pubspec version
+        run: |
+          VERSION=$(sed -n 's/^version:[[:space:]]*//p' pubspec.yaml | head -n 1)
+          VERSION="${VERSION%%+*}"
+          TAG="${GITHUB_REF_NAME#v}"
+          TAG="${TAG%%+*}"
+          if [ -z "$VERSION" ] || [ "$VERSION" != "$TAG" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match pubspec version $VERSION" >&2
+            exit 1
+          fi
+
       - name: Build Linux release
         run: flutter build linux --release
 

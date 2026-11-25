@@ -40,6 +40,7 @@ migrate_working_dir/
 **/ephemeral/
 android/local.properties
 *.tar.gz
+*.sha256
 
 # Symbolication related
 app.*.symbols

@@ -121,6 +121,11 @@ Future<void> showMsgDetails(
             },
             child: Text(note.isEmpty ? 'Add note' : 'Edit note'),
           ),
+        if (m.text.isNotEmpty)
+          TextButton(
+            onPressed: () => Clipboard.setData(ClipboardData(text: m.text)),
+            child: const Text('Copy text'),
+          ),
         TextButton(
           onPressed: () => Clipboard.setData(ClipboardData(text: json)),
           child: const Text('Copy JSON'),
@@ -381,6 +386,26 @@ class Bubble extends StatelessWidget {
   void details(BuildContext context) =>
       showMsgDetails(context, m, chat, store: store);
 
+  void copyText(BuildContext context) {
+    if (m.text.isEmpty) return;
+    Clipboard.setData(ClipboardData(text: m.text));
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Message text copied'),
+        duration: Duration(seconds: 1),
+      ),
+    );
+  }
+
+  Widget copyButton(BuildContext context) => IconButton(
+    padding: EdgeInsets.zero,
+    constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
+    iconSize: 14,
+    tooltip: 'Copy message text',
+    icon: const Icon(Icons.copy, size: 14),
+    onPressed: () => copyText(context),
+  );
+
   Widget mediaWidget(BuildContext context, Media x, Color fg) {
     final label = x.kind.replaceAll('_', ' ');
     final p = store.findMedia(x.uri, chat);
@@ -512,6 +537,7 @@ class Bubble extends StatelessWidget {
                   : Icon(Icons.info_outline, size: 12, color: style?.color),
             ),
           ),
+          if (m.text.isNotEmpty) copyButton(context),
           if (onToggleBookmark != null)
             IconButton(
               padding: EdgeInsets.zero,
@@ -693,7 +719,15 @@ class Bubble extends StatelessWidget {
         children: [
           if (st.showReplies && m.reply != null)
             ReplyQuote(m: m, fg: cs.onSurface, onOpen: onOpenReply),
-          Text.rich(TextSpan(style: base, children: spans)),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Text.rich(TextSpan(style: base, children: spans)),
+              ),
+              if (m.text.isNotEmpty) copyButton(context),
+            ],
+          ),
           for (final x in m.media) mediaWidget(context, x, cs.onSurface),
           if (m.share.isNotEmpty) Text('🔗 ${m.share}', style: base),
           if (m.reactions.isNotEmpty)

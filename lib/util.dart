@@ -32,14 +32,23 @@ int nextMatchPosition(int? current, List<int> matches, int delta) {
   return (pos + delta + matches.length) % matches.length;
 }
 
-/// First index in [items] whose timestamp is at or after [target].
-/// Items are expected to be sorted by time; no allocation is needed.
-int firstIndexAtOrAfter<T>(List<T> items, int target, int Function(T) timeOf) {
+/// First index in reading order whose timestamp is at or after [target].
+/// Items are expected to be sorted by time; no allocation is needed. With
+/// [descending], the list is already newest-first, so "at or after" means the
+/// first timestamp <= target.
+int firstIndexAtOrAfter<T>(
+  List<T> items,
+  int target,
+  int Function(T) timeOf, {
+  bool descending = false,
+}) {
   var lo = 0;
   var hi = items.length;
   while (lo < hi) {
     final mid = (lo + hi) >> 1;
-    if (timeOf(items[mid]) < target) {
+    final t = timeOf(items[mid]);
+    final beforeTarget = descending ? t > target : t < target;
+    if (beforeTarget) {
       lo = mid + 1;
     } else {
       hi = mid;
