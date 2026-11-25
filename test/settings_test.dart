@@ -186,4 +186,21 @@ void main() {
       expect(reloaded.notes['chat|msg'], 'remember this');
     },
   );
+
+  test('breadcrumbs are written synchronously to the error log', () async {
+    final dir = await Directory.systemTemp.createTemp(
+      'fb_viewer_breadcrumb_test_',
+    );
+    addTearDown(() {
+      if (dir.existsSync()) dir.deleteSync(recursive: true);
+    });
+
+    final settings = AppSettings(configDir: dir.path);
+    addTearDown(settings.dispose);
+
+    settings.logBreadcrumb('opened a chat');
+
+    final log = File(settings.logPath).readAsStringSync();
+    expect(log, contains('[breadcrumb] opened a chat'));
+  });
 }

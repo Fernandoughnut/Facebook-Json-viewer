@@ -35,6 +35,7 @@ Future<void> main() async {
     settings.logError('$error\n$stack');
     return false; // still let Flutter print it in the terminal
   };
+  settings.logBreadcrumb('Indexed started');
 
   // Let the picture cache hold more, so scrolling back over photos does not decode them again.
   final cache = PaintingBinding.instance.imageCache;
@@ -241,6 +242,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Msg? _jumpTarget;
   bool unlocked = false;
   bool _largeFileWarningShown = false;
+  final ScrollController _chatListController = ScrollController();
 
   @override
   void initState() {
@@ -274,6 +276,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void dispose() {
     filterController.dispose();
+    _chatListController.dispose();
     store.dispose();
     super.dispose();
   }
@@ -481,7 +484,10 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  static const int _largeExportBytes = 40 * 1024 * 1024;
+  // A 20 MB export can grow to well over a GB in debug mode when raw JSON is
+  // retained for every message. Ask before that happens, not after the VM has
+  // exhausted its heap.
+  static const int _largeExportBytes = 8 * 1024 * 1024;
 
   Future<void> _offerLighterMemoryForLargeFiles(List<String> paths) async {
     if (_largeFileWarningShown || !widget.settings.keepRaw || !mounted) return;
@@ -514,6 +520,7 @@ class _HomeScreenState extends State<HomeScreen> {
         ) ??
         false;
     if (turnOff && mounted) {
+      widget.settings.logBreadcrumb('Large export: raw retention disabled');
       widget.settings.update(() => widget.settings.keepRaw = false);
     }
   }
@@ -607,6 +614,9 @@ class _HomeScreenState extends State<HomeScreen> {
     );
     if (files.isEmpty) return;
     final paths = files.map((f) => f.path).whereType<String>().toList();
+    widget.settings.logBreadcrumb(
+      'Open JSON: ${paths.length} file(s), keepRaw=${widget.settings.keepRaw}',
+    );
     await _offerLighterMemoryForLargeFiles(paths);
     await store.addJsonFiles(paths);
     if (mounted && selected == null && store.chats.length == 1) {
@@ -635,6 +645,9 @@ class _HomeScreenState extends State<HomeScreen> {
       }
       return;
     }
+    widget.settings.logBreadcrumb(
+      'Import folder: ${files.length} file(s), keepRaw=${widget.settings.keepRaw}',
+    );
     await _offerLighterMemoryForLargeFiles(files);
     await store.addJsonFiles(files);
     if (mounted && selected == null && store.chats.length == 1) {
@@ -648,6 +661,9 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void openChat(Chat c, bool wide, {Msg? target}) {
+    widget.settings.logBreadcrumb(
+      'Open conversation: ${c.title} (${c.messages.length} messages)',
+    );
     widget.settings.lastChat = c.key;
     widget.settings.save();
     if (wide) {
@@ -673,6 +689,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> searchAll() async {
+    widget.settings.logBreadcrumb('Open global search');
     final hit = await Navigator.of(context).push<GlobalHit>(
       MaterialPageRoute(builder: (_) => GlobalSearchScreen(store: store)),
     );
@@ -681,6 +698,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> openTools() async {
+    widget.settings.logBreadcrumb('Open tools');
     final hit = await Navigator.of(context).push<GlobalHit>(
       MaterialPageRoute(builder: (_) => ToolsScreen(store: store)),
     );
@@ -906,86 +924,109 @@ class _HomeScreenState extends State<HomeScreen> {
         Expanded(
           child: chats.isEmpty
               ? _emptyState(filtered: q.isNotEmpty)
-              : ListView.separated(
-                  itemCount: chats.length,
-                  separatorBuilder: (_, _) => const SizedBox(height: 2),
-                  itemBuilder: (context, i) {
-                    final c = chats[i];
-                    final initial = c.title.isEmpty
-                        ? '?'
-                        : c.title[0].toUpperCase();
-                    final isArchived = archived(c);
-                    return Builder(
-                      builder: (tileContext) => GestureDetector(
-                        onSecondaryTapDown: (d) => unawaited(
-                          _showConversationMenu(
-                            tileContext,
-                            d.globalPosition,
-                            c,
+              : RawScrollbar(
+                  controller: _chatListController,
+                  thumbVisibility: true,
+                  thickness: 6,
+                  radius: const Radius.circular(8),
+                  mainAxisMargin: 4,
+                  crossAxisMargin: 2,
+                  thumbColor: cs.onSurface.withValues(alpha: 0.24),
+                  child: ListView.separated(
+                    controller: _chatListController,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
+                    itemCount: chats.length,
+                    separatorBuilder: (_, _) => const SizedBox(height: 6),
+                    itemBuilder: (context, i) {
+                      final c = chats[i];
+                      final initial = c.title.isEmpty
+                          ? '?'
+                          : c.title[0].toUpperCase();
+                      final isArchived = archived(c);
+                      return Builder(
+                        builder: (tileContext) => GestureDetector(
+                          onSecondaryTapDown: (d) => unawaited(
+                            _showConversationMenu(
+                              tileContext,
+                              d.globalPosition,
+                              c,
+                            ),
                           ),
-                        ),
-                        child: ListTile(
-                          selected: wide && selected?.key == c.key,
-                          leading: CircleAvatar(
-                            backgroundColor: isArchived
-                                ? cs.surfaceContainerHighest
-                                : cs.primaryContainer,
-                            foregroundColor: isArchived
-                                ? cs.onSurfaceVariant
-                                : cs.onPrimaryContainer,
-                            child: Text(initial),
-                          ),
-                          title: Row(
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  c.title,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                              if (isArchived)
-                                Padding(
-                                  padding: const EdgeInsets.only(left: 6),
-                                  child: Icon(
-                                    Icons.archive_outlined,
-                                    size: 14,
-                                    color: cs.onSurfaceVariant,
+                          child: ListTile(
+                            selected: wide && selected?.key == c.key,
+                            selectedTileColor: cs.secondaryContainer,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 6,
+                            ),
+                            leading: CircleAvatar(
+                              backgroundColor: isArchived
+                                  ? cs.surfaceContainerHighest
+                                  : cs.primaryContainer,
+                              foregroundColor: isArchived
+                                  ? cs.onSurfaceVariant
+                                  : cs.onPrimaryContainer,
+                              child: Text(initial),
+                            ),
+                            title: Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    c.title,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
                                   ),
                                 ),
-                            ],
-                          ),
-                          subtitle: Text(
-                            '${c.messages.length} messages · ${fmtDate(c.lastT == 0 ? null : c.lastT)}',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          trailing: c.dirs.isEmpty
-                              ? null
-                              : Tooltip(
-                                  message: 'Has media folders',
-                                  child: Icon(
-                                    Icons.folder,
-                                    size: 16,
-                                    color: cs.onSurfaceVariant,
+                                if (isArchived)
+                                  Padding(
+                                    padding: const EdgeInsets.only(left: 6),
+                                    child: Icon(
+                                      Icons.archive_outlined,
+                                      size: 14,
+                                      color: cs.onSurfaceVariant,
+                                    ),
                                   ),
+                              ],
+                            ),
+                            subtitle: Text(
+                              '${c.messages.length} messages · ${fmtDate(c.lastT == 0 ? null : c.lastT)}',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            trailing: c.dirs.isEmpty
+                                ? null
+                                : Tooltip(
+                                    message: 'Has media folders',
+                                    child: Icon(
+                                      Icons.folder,
+                                      size: 16,
+                                      color: cs.onSurfaceVariant,
+                                    ),
+                                  ),
+                            onTap: () => openChat(c, wide),
+                            onLongPress: () {
+                              final box =
+                                  tileContext.findRenderObject() as RenderBox?;
+                              unawaited(
+                                _showConversationMenu(
+                                  tileContext,
+                                  box?.localToGlobal(Offset.zero) ??
+                                      Offset.zero,
+                                  c,
                                 ),
-                          onTap: () => openChat(c, wide),
-                          onLongPress: () {
-                            final box =
-                                tileContext.findRenderObject() as RenderBox?;
-                            unawaited(
-                              _showConversationMenu(
-                                tileContext,
-                                box?.localToGlobal(Offset.zero) ?? Offset.zero,
-                                c,
-                              ),
-                            );
-                          },
+                              );
+                            },
+                          ),
                         ),
-                      ),
-                    );
-                  },
+                      );
+                    },
+                  ),
                 ),
         ),
         if (store.status.isNotEmpty)

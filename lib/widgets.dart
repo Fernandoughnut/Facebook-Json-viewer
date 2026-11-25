@@ -575,7 +575,7 @@ class Bubble extends StatelessWidget {
     return Align(
       alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
       child: Padding(
-        padding: EdgeInsets.symmetric(vertical: compact ? 0 : 1),
+        padding: EdgeInsets.symmetric(vertical: compact ? 2 : 4),
         child: Column(
           crossAxisAlignment: mine
               ? CrossAxisAlignment.end
@@ -669,8 +669,8 @@ class Bubble extends StatelessWidget {
     }
 
     return Container(
-      margin: const EdgeInsets.symmetric(vertical: 1),
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      margin: const EdgeInsets.symmetric(vertical: 2),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: selected
           ? BoxDecoration(
               color: cs.tertiaryContainer,

@@ -428,10 +428,19 @@ class _InsightsTabState extends State<InsightsTab> {
 
   void _startAnalysis(String sig) {
     _sig = sig;
-    _future = compute(
-      analyzeInsightsRows,
-      _insightsSnapshot(widget.store),
-    ).then(_InsightsData.fromResult);
+    final count = widget.store.chats.values.fold<int>(
+      0,
+      (n, c) => n + c.messages.length,
+    );
+    gSettings?.logBreadcrumb(
+      'Insights analysis started ($count messages, '
+      'keepRaw=${widget.store.settings.keepRaw})',
+    );
+    _future = compute(analyzeInsightsRows, _insightsSnapshot(widget.store))
+        .then((r) {
+          gSettings?.logBreadcrumb('Insights analysis finished');
+          return _InsightsData.fromResult(r);
+        });
   }
 
   void _ensureFuture() {

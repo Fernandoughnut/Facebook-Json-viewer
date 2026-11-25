@@ -17,6 +17,7 @@ class GlobalSearchScreen extends StatefulWidget {
 
 class _GlobalSearchScreenState extends State<GlobalSearchScreen> {
   final qc = TextEditingController();
+  final ScrollController _resultsController = ScrollController();
   Timer? _timer;
   String query = '';
   String? sender;
@@ -36,6 +37,7 @@ class _GlobalSearchScreenState extends State<GlobalSearchScreen> {
     widget.store.removeListener(_onStoreChanged);
     _timer?.cancel();
     qc.dispose();
+    _resultsController.dispose();
     super.dispose();
   }
 
@@ -181,42 +183,61 @@ class _GlobalSearchScreenState extends State<GlobalSearchScreen> {
                           : 'No matches.',
                     ),
                   )
-                : ListView.builder(
-                    itemCount: hits.length,
-                    itemBuilder: (context, i) {
-                      final h = hits[i];
-                      final m = h.msg;
-                      return ListTile(
-                        dense: true,
-                        title: Text.rich(
-                          TextSpan(
-                            children: [
-                              TextSpan(
-                                text: '${displayName(m.sender)}: ',
-                                style: theme.textTheme.bodyMedium?.copyWith(
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                              ...highlightSpans(
-                                snippet(m.text, query).replaceAll('\n', ' '),
-                                query,
-                                null,
-                                kHighlightColor,
-                              ),
-                            ],
+                : RawScrollbar(
+                    controller: _resultsController,
+                    thumbVisibility: true,
+                    thickness: 6,
+                    radius: const Radius.circular(8),
+                    mainAxisMargin: 4,
+                    crossAxisMargin: 2,
+                    thumbColor: Theme.of(context).colorScheme.onSurface
+                        .withValues(alpha: 0.24),
+                    child: ListView.separated(
+                      controller: _resultsController,
+                      padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
+                      itemCount: hits.length,
+                      separatorBuilder: (_, _) => const SizedBox(height: 4),
+                      itemBuilder: (context, i) {
+                        final h = hits[i];
+                        final m = h.msg;
+                        return ListTile(
+                          dense: true,
+                          selectedTileColor: Theme.of(context)
+                              .colorScheme
+                              .secondaryContainer,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
                           ),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        subtitle: Text(
-                          '${h.chat.title} · ${fmtDate(m.t)} ${fmtTime(m.t)}'
-                          '${m.media.isNotEmpty ? ' · ${m.media.length} media' : ''}',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        onTap: () => Navigator.of(context).pop(h),
-                      );
-                    },
+                          title: Text.rich(
+                            TextSpan(
+                              children: [
+                                TextSpan(
+                                  text: '${displayName(m.sender)}: ',
+                                  style: theme.textTheme.bodyMedium?.copyWith(
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                                ...highlightSpans(
+                                  snippet(m.text, query).replaceAll('\n', ' '),
+                                  query,
+                                  null,
+                                  kHighlightColor,
+                                ),
+                              ],
+                            ),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          subtitle: Text(
+                            '${h.chat.title} · ${fmtDate(m.t)} ${fmtTime(m.t)}'
+                            '${m.media.isNotEmpty ? ' · ${m.media.length} media' : ''}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          onTap: () => Navigator.of(context).pop(h),
+                        );
+                      },
+                    ),
                   ),
           ),
         ],

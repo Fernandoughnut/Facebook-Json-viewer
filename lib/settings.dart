@@ -639,19 +639,27 @@ class AppSettings extends ChangeNotifier {
     } catch (_) {}
   }
 
-  /// Append an error to the log file, so a crash can be looked at afterwards.
-  void logError(String text) {
+  /// Append a line to the error log, keeping it bounded.
+  void _appendLog(String line) {
     try {
       final f = File(logPath);
       f.parent.createSync(recursive: true);
       if (f.existsSync() && f.lengthSync() > 512 * 1024) {
         f.writeAsStringSync('');
       }
-      f.writeAsStringSync(
-        '${DateTime.now().toIso8601String()}\n$text\n\n',
-        mode: FileMode.append,
-      );
+      f.writeAsStringSync('$line\n', mode: FileMode.append);
     } catch (_) {}
+  }
+
+  /// Append an error to the log file, so a crash can be looked at afterwards.
+  void logError(String text) {
+    _appendLog('${DateTime.now().toIso8601String()}\n$text\n');
+  }
+
+  /// Record the last user action synchronously. Native aborts bypass Dart's
+  /// error handlers, so this breadcrumb is often all that survives a crash.
+  void logBreadcrumb(String text) {
+    _appendLog('${DateTime.now().toIso8601String()} [breadcrumb] $text');
   }
 
   @override

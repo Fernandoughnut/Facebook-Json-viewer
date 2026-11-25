@@ -88,6 +88,7 @@ class _ChatViewState extends State<ChatView> {
   final qc = TextEditingController();
   final searchFocus = FocusNode();
   final MenuController _menuController = MenuController();
+  final ScrollController _resultsController = ScrollController();
 
   // A fresh controller is made every time the list is rebuilt from scratch: a scroll
   // controller can only belong to one list at a time.
@@ -215,6 +216,7 @@ class _ChatViewState extends State<ChatView> {
     _searchTimer?.cancel();
     qc.dispose();
     searchFocus.dispose();
+    _resultsController.dispose();
     super.dispose();
   }
 
@@ -2038,7 +2040,8 @@ class _ChatViewState extends State<ChatView> {
     // `results` follows the order of the chat; map the index instead of
     // copying and reversing tens of thousands of entries on every rebuild.
     final reverse = dateSort && ((sort == SortMode.oldest) == newestFirst);
-    final muted = Theme.of(context).colorScheme.outline;
+    final cs = Theme.of(context).colorScheme;
+    final muted = cs.outline;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -2086,64 +2089,87 @@ class _ChatViewState extends State<ChatView> {
         Expanded(
           child: results.isEmpty
               ? const Center(child: Text('No matches'))
-              : ListView.builder(
-                  itemCount: results.length,
-                  itemBuilder: (context, i) {
-                    final idx = results[reverse ? results.length - 1 - i : i];
-                    final m = view[idx];
-                    final when = '${fmtDate(m.t)} ${fmtTime(m.t)}';
-                    final hq = _highlightFor(m);
-                    if (compact) {
+              : RawScrollbar(
+                  controller: _resultsController,
+                  thumbVisibility: true,
+                  thickness: 6,
+                  radius: const Radius.circular(8),
+                  mainAxisMargin: 4,
+                  crossAxisMargin: 2,
+                  thumbColor: cs.onSurface.withValues(alpha: 0.24),
+                  child: ListView.separated(
+                    controller: _resultsController,
+                    padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
+                    itemCount: results.length,
+                    separatorBuilder: (_, _) => const SizedBox(height: 4),
+                    itemBuilder: (context, i) {
+                      final idx = results[reverse ? results.length - 1 - i : i];
+                      final m = view[idx];
+                      final when = '${fmtDate(m.t)} ${fmtTime(m.t)}';
+                      final hq = _highlightFor(m);
+                      final shape = RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      );
+                      if (compact) {
+                        return ListTile(
+                          dense: true,
+                          visualDensity: VisualDensity.compact,
+                          selected: highlight == idx,
+                          selectedTileColor: cs.secondaryContainer,
+                          shape: shape,
+                          title: Text.rich(
+                            TextSpan(
+                              children: [
+                                TextSpan(
+                                  text: '$when  ${displayName(m.sender)}: ',
+                                  style: TextStyle(color: muted, fontSize: 12),
+                                ),
+                                ...highlightSpans(
+                                  snippet(
+                                    m.text,
+                                    hq,
+                                    caseSensitive: _highlightExact,
+                                  ).replaceAll('\n', ' '),
+                                  hq,
+                                  null,
+                                  kHighlightColor,
+                                  caseSensitive: _highlightExact,
+                                ),
+                              ],
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          onTap: () => jumpToMessage(idx),
+                        );
+                      }
                       return ListTile(
                         dense: true,
-                        visualDensity: VisualDensity.compact,
                         selected: highlight == idx,
+                        selectedTileColor: cs.secondaryContainer,
+                        shape: shape,
                         title: Text.rich(
                           TextSpan(
-                            children: [
-                              TextSpan(
-                                text: '$when  ${displayName(m.sender)}: ',
-                                style: TextStyle(color: muted, fontSize: 12),
-                              ),
-                              ...highlightSpans(
-                                snippet(
-                                  m.text,
-                                  hq,
-                                  caseSensitive: _highlightExact,
-                                ).replaceAll('\n', ' '),
+                            children: highlightSpans(
+                              snippet(
+                                m.text,
                                 hq,
-                                null,
-                                kHighlightColor,
                                 caseSensitive: _highlightExact,
                               ),
-                            ],
+                              hq,
+                              null,
+                              kHighlightColor,
+                              caseSensitive: _highlightExact,
+                            ),
                           ),
-                          maxLines: 1,
+                          maxLines: 3,
                           overflow: TextOverflow.ellipsis,
                         ),
+                        subtitle: Text('${displayName(m.sender)} · $when'),
                         onTap: () => jumpToMessage(idx),
                       );
-                    }
-                    return ListTile(
-                      dense: true,
-                      selected: highlight == idx,
-                      title: Text.rich(
-                        TextSpan(
-                          children: highlightSpans(
-                            snippet(m.text, hq, caseSensitive: _highlightExact),
-                            hq,
-                            null,
-                            kHighlightColor,
-                            caseSensitive: _highlightExact,
-                          ),
-                        ),
-                        maxLines: 3,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      subtitle: Text('${displayName(m.sender)} · $when'),
-                      onTap: () => jumpToMessage(idx),
-                    );
-                  },
+                    },
+                  ),
                 ),
         ),
       ],
