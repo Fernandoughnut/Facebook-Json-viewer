@@ -88,7 +88,7 @@ class _NoDesktopScrollbar extends ScrollBehavior {
 /// The chat list has variable-height bubbles, so a pixel scrollbar would make
 /// the sliver lay out every earlier message to find the offset. This one jumps
 /// straight to an index and lets the list rebuild around that item only.
-class _IndexScrollbar extends StatelessWidget {
+class _IndexScrollbar extends StatefulWidget {
   const _IndexScrollbar({
     required this.itemCount,
     required this.topIndex,
@@ -101,41 +101,108 @@ class _IndexScrollbar extends StatelessWidget {
   final ValueListenable<int> visibleCount;
   final ValueChanged<int> onJump;
 
-  void _jumpTo(double dy, double height, double thumbHeight) {
-    if (height <= 0 || itemCount <= 0) return;
+  @override
+  State<_IndexScrollbar> createState() => _IndexScrollbarState();
+}
+
+class _IndexScrollbarState extends State<_IndexScrollbar> {
+  /// Rebuilding the 80k-item list on every pointer event is what makes a drag
+  /// feel frozen. The thumb follows the pointer locally; actual jumps are
+  /// throttled and a final jump is issued when the drag ends.
+  static const _jumpInterval = Duration(milliseconds: 120);
+
+  int? _preview;
+  int? _pending;
+  int? _lastJumped;
+  DateTime? _lastJump;
+  Timer? _timer;
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  int _indexFor(double dy, double height, double thumbHeight) {
+    if (height <= 0 || widget.itemCount <= 0) return 0;
     final travel = math.max(1.0, height - thumbHeight);
     final fraction = ((dy - thumbHeight / 2) / travel).clamp(0.0, 1.0);
-    onJump((fraction * (itemCount - 1)).round().clamp(0, itemCount - 1));
+    return (fraction * (widget.itemCount - 1)).round().clamp(
+      0,
+      widget.itemCount - 1,
+    );
+  }
+
+  void _drag(double dy, double height, double thumbHeight) {
+    final idx = _indexFor(dy, height, thumbHeight);
+    if (_preview == idx) return;
+    setState(() => _preview = idx);
+
+    final now = DateTime.now();
+    final last = _lastJump;
+    if (last == null || now.difference(last) >= _jumpInterval) {
+      _lastJump = now;
+      _lastJumped = idx;
+      widget.onJump(idx);
+      return;
+    }
+    _pending = idx;
+    _timer ??= Timer(_jumpInterval - now.difference(last), () {
+      _timer = null;
+      final target = _pending;
+      _pending = null;
+      if (target == null || !mounted) return;
+      _lastJump = DateTime.now();
+      _lastJumped = target;
+      widget.onJump(target);
+    });
+  }
+
+  void _endDrag() {
+    _timer?.cancel();
+    _timer = null;
+    final idx = _preview;
+    _pending = null;
+    if (idx != null && idx != _lastJumped) {
+      _lastJump = DateTime.now();
+      _lastJumped = idx;
+      widget.onJump(idx);
+    }
+    if (_preview != null && mounted) setState(() => _preview = null);
   }
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     return ValueListenableBuilder<int>(
-      valueListenable: topIndex,
+      valueListenable: widget.topIndex,
       builder: (context, top, _) => ValueListenableBuilder<int>(
-        valueListenable: visibleCount,
+        valueListenable: widget.visibleCount,
         builder: (context, visible, _) {
           return LayoutBuilder(
             builder: (context, box) {
               final height = box.maxHeight;
               final thumbHeight = math.max(
                 24.0,
-                height * visible / math.max(1, itemCount),
+                height * visible / math.max(1, widget.itemCount),
               );
-              final maxTop = math.max(0, itemCount - visible);
+              final maxTop = math.max(0, widget.itemCount - visible);
+              final position = _preview ?? top;
               final progress = maxTop == 0
                   ? 0.0
-                  : (top / maxTop).clamp(0.0, 1.0);
+                  : (position / maxTop).clamp(0.0, 1.0);
               final thumbTop = progress * math.max(0.0, height - thumbHeight);
               return GestureDetector(
                 behavior: HitTestBehavior.opaque,
                 onTapDown: (d) =>
-                    _jumpTo(d.localPosition.dy, height, thumbHeight),
+                    _drag(d.localPosition.dy, height, thumbHeight),
+                onTapUp: (_) => _endDrag(),
                 onPanStart: (d) =>
-                    _jumpTo(d.localPosition.dy, height, thumbHeight),
+                    _drag(d.localPosition.dy, height, thumbHeight),
                 onPanUpdate: (d) =>
-                    _jumpTo(d.localPosition.dy, height, thumbHeight),
+                    _drag(d.localPosition.dy, height, thumbHeight),
+                onPanEnd: (_) => _endDrag(),
+                onPanCancel: _endDrag,
                 child: Container(
                   width: 14,
                   margin: const EdgeInsets.symmetric(vertical: 4),
