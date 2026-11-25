@@ -43,6 +43,11 @@ kotlin {
     }
 }
 
+dependencies {
+    // Required to walk the content:// tree returned by ACTION_OPEN_DOCUMENT_TREE.
+    implementation("androidx.documentfile:documentfile:1.0.1")
+}
+
 flutter {
     source = "../.."
 }

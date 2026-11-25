@@ -121,7 +121,7 @@ The script builds the release bundle, archives its *contents* with the required 
 
 The first Android pass is for sideloading on an AOSP phone and tablet. The app is labelled **Indexed** and uses the application ID `dev.local.indexed`; the Dart package and config folder are still named `fb_viewer` so existing data keeps working. Release APKs are currently debug-signed. If an older `dev.local.fb_viewer` build is installed, uninstall it first — Android treats the new ID as a separate app.
 
-Core reading, search, filters, export and inline photos are supported. Videos/audio, HEIC thumbnails and persistent SAF folder permissions are still pending; see Current limitations below.
+Core reading, search, filters, export and inline photos are supported. On Android the media button opens the system folder picker; Indexed then copies that folder's photos and videos into app-private storage so thousands of files can be indexed without gallery multi-select. Videos and HEIC images are copied and listed, but opening/rendering them is still pending; see Current limitations below.
 
 To build sideload APKs:
 
@@ -176,7 +176,7 @@ dart run tool/generate_large_export.dart 100000 /tmp/opencode/large_export.json
 ## Current limitations
 
 - Settings and the remembered session are saved to `$HOME/.config/fb_viewer/state.json` on Linux. On Android they live in the app-private documents directory (`config/state.json`), so they survive app restarts but are removed if the app is uninstalled.
-- On Android, imported JSON files and selected photos are copied into that same app-private storage (`imports/` and `media/`), not left in Android's temporary cache. Media is selected as individual photos; SAF folder trees (`content://`) cannot be scanned directly.
+- On Android, imported JSON files and media folders are copied into that same app-private storage (`imports/` and `media/`), not left in Android's temporary cache. The folder picker uses SAF (`content://`) and streams files into app storage; the original folder is not modified.
 - Videos and voice clips open in the default player on Linux only.
 - HEIC photos cannot be displayed.
 - Desktop drag-and-drop of files onto the window is not implemented; use **Open JSON** or the folder-import button. Bulk import and multi-file selection are supported.

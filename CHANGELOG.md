@@ -18,10 +18,11 @@ The format is based on Keep a Changelog, and versions follow Semantic Versioning
 - Temporary media folders, test fixtures and generated export filenames now use
   `indexed_` prefixes instead of `fb_viewer_`. Package and config names stay
   `fb_viewer` for compatibility.
-- Android now stores settings, imported JSON and copied photos in app-private
+- Android now stores settings, imported JSON and media folders in app-private
   storage instead of `$HOME/.config` and temporary directories.
-- Android media selection goes straight to picking photos instead of opening a
-  SAF folder tree that cannot be scanned.
+- Android media selection uses the system folder picker again. A native SAF
+  bridge streams photos and videos into app storage so large mixed folders can
+  be indexed without gallery multi-select.
 
 ### Fixed
 
@@ -29,8 +30,8 @@ The format is based on Keep a Changelog, and versions follow Semantic Versioning
   Android app is closed or killed in the background.
 - `state.json` is now written synchronously on lifecycle pauses, so a fast app
   switch cannot lose the last settings change.
-- Android media picker no longer rejects picked folders with a `content://` URI,
-  and copied photos persist across restarts.
+- The Android media button no longer opens a photo picker or rejects `content://`
+  folder handles; picked folders are imported and persisted across restarts.
 
 Planned next:
 

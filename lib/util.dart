@@ -6,6 +6,7 @@ import 'dart:math' as math;
 import 'package:file_picker/file_picker.dart';
 import 'package:material_ui/material_ui.dart';
 
+import 'android_folder.dart';
 import 'models.dart';
 import 'settings.dart';
 import 'store.dart';
@@ -146,29 +147,34 @@ Future<void> openExternal(String path, BuildContext context) async {
 }
 
 /// Ask for a folder. On desktop this returns the folder directly. On Android,
-/// SAF folder handles are content:// URIs that dart:io cannot walk, so we pick
-/// photos instead and copy them into app-private storage that survives restarts.
+/// SAF folder handles are content:// URIs that dart:io cannot walk, so the
+/// native side streams the folder's media into app-private storage first.
 Future<String?> pickFolder(Store store) async {
   if (Platform.isAndroid) {
-    final picked = await FilePicker.pickFiles(
-      type: FileType.image,
-      dialogTitle: 'Select photos',
-    );
-    if (picked.isEmpty) return null;
-    final stamp = DateTime.now().microsecondsSinceEpoch;
+    final uri = await AndroidFolderPicker.pick();
+    if (uri == null) return null;
     final dir = Directory(
-      '${store.settings.mediaDir}${Platform.pathSeparator}$stamp',
+      '${store.settings.mediaDir}${Platform.pathSeparator}'
+      '${AndroidFolderPicker.folderNameFor(uri)}',
     );
     await dir.create(recursive: true);
-    var copied = 0;
-    for (final f in picked) {
-      final name = safeMediaFileName(f.name);
-      final target = File('${dir.path}${Platform.pathSeparator}$name');
-      await target.writeAsBytes(await f.readAsBytes());
-      copied++;
+    final result = await AndroidFolderPicker.import(uri, dir.path);
+    final error = result['error'];
+    if (error != null) {
+      store.setStatus('Could not import that folder: $error');
+      return null;
     }
-    store.setStatus('Copied $copied selected photo(s) into Indexed storage.');
-    return copied == 0 ? null : dir.path;
+    final copied = result['copied'] as int? ?? 0;
+    final skipped = result['skipped'] as int? ?? 0;
+    if (copied == 0 && skipped == 0) {
+      store.setStatus('No photos or videos were found in that folder.');
+      return null;
+    }
+    store.setStatus(
+      'Imported $copied media file(s) from the folder'
+      '${skipped > 0 ? ' ($skipped already present or unreadable)' : ''}.',
+    );
+    return dir.path;
   }
 
   Uri? uri;
