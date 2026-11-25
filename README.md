@@ -112,7 +112,7 @@ To build and package that bundle locally:
 
 ```bash
 ./tool/package_linux.sh                         # indexed-linux-x64.tar.gz
-./tool/package_linux.sh Indexed-linux-x64-v1.1.0.tar.gz
+./tool/package_linux.sh Indexed-linux-x64-v1.2.0.tar.gz
 ```
 
 The script builds the release bundle, archives its *contents* with the required trailing `.`, and writes a `.sha256` file beside the archive.
@@ -123,7 +123,7 @@ The first Android pass is for sideloading on an AOSP phone and tablet. The app i
 
 Core reading, search, filters, export and inline photos are supported. Videos/audio, HEIC thumbnails and persistent SAF folder permissions are still pending; see Current limitations below.
 
-Pushing a version tag such as `v1.1.0` triggers `.github/workflows/release.yml`: GitHub checks that the tag matches `pubspec.yaml`, runs the checks, builds the Linux release bundle, packages it as `Indexed-linux-x64-v1.1.0.tar.gz`, and attaches it to a new GitHub Release with a SHA-256 checksum.
+Pushing a version tag such as `v1.2.0` triggers `.github/workflows/release.yml`: GitHub checks that the tag matches `pubspec.yaml`, runs the checks, builds the Linux release bundle, packages it as `Indexed-linux-x64-v1.2.0.tar.gz`, and attaches it to a new GitHub Release with a SHA-256 checksum.
 
 To measure parsing on a synthetic 100k-message export:
 
