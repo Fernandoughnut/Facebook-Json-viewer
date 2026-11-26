@@ -190,6 +190,61 @@ class _SettingsScreenState extends State<SettingsScreen> {
     onCommit: onChanged,
   );
 
+  /// The start position has three fairly long labels. Keep the segmented row
+  /// on wide screens, but use a dropdown on phones so every choice is visible.
+  Widget startAtChoice() {
+    return LayoutBuilder(
+      builder: (context, box) {
+        if (box.maxWidth >= 520) {
+          return choice<StartAt>(
+            selected: {settings.startAt},
+            segments: const [
+              ButtonSegment(
+                value: StartAt.newest,
+                label: Text('Newest message'),
+              ),
+              ButtonSegment(
+                value: StartAt.oldest,
+                label: Text('Oldest message'),
+              ),
+              ButtonSegment(
+                value: StartAt.leftOff,
+                label: Text('Where I left off'),
+              ),
+            ],
+            onChanged: (v) => settings.update(() => settings.startAt = v),
+          );
+        }
+        return DropdownButtonFormField<StartAt>(
+          initialValue: settings.startAt,
+          isExpanded: true,
+          decoration: const InputDecoration(
+            border: OutlineInputBorder(),
+            isDense: true,
+            contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          ),
+          items: const [
+            DropdownMenuItem(
+              value: StartAt.newest,
+              child: Text('Newest message'),
+            ),
+            DropdownMenuItem(
+              value: StartAt.oldest,
+              child: Text('Oldest message'),
+            ),
+            DropdownMenuItem(
+              value: StartAt.leftOff,
+              child: Text('Where I left off'),
+            ),
+          ],
+          onChanged: (v) {
+            if (v != null) settings.update(() => settings.startAt = v);
+          },
+        );
+      },
+    );
+  }
+
   /// A row of choices that can scroll sideways on a narrow screen.
   Widget choice<T>({
     required Set<T> selected,
@@ -516,22 +571,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
       section(
         context,
         'Reading',
-        'layout bubbles compact plain time clock minute group replies photo gallery image',
+        'layout bubbles compact plain time clock minute group replies photo gallery image open conversations at start newest oldest left off reading position',
       ),
       const Text('Open conversations at'),
       const SizedBox(height: 8),
-      choice<StartAt>(
-        selected: {settings.startAt},
-        segments: const [
-          ButtonSegment(value: StartAt.newest, label: Text('Newest message')),
-          ButtonSegment(value: StartAt.oldest, label: Text('Oldest message')),
-          ButtonSegment(
-            value: StartAt.leftOff,
-            label: Text('Where I left off'),
-          ),
-        ],
-        onChanged: (v) => settings.update(() => settings.startAt = v),
-      ),
+      startAtChoice(),
       hint(
         context,
         'Applies when messages are sorted by date (oldest first). '

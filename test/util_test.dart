@@ -128,6 +128,32 @@ void main() {
     expect(revealed, isFalse);
   });
 
+  test('an open menu keeps immersive controls pinned while scrolling', () {
+    bool hide({
+      bool enabled = true,
+      bool menuOpen = false,
+      bool visible = true,
+      bool queryActive = false,
+      bool searchFocused = false,
+      bool selecting = false,
+    }) => shouldAutoHideImmersiveControls(
+      enabled: enabled,
+      menuOpen: menuOpen,
+      visible: visible,
+      queryActive: queryActive,
+      searchFocused: searchFocused,
+      selecting: selecting,
+    );
+
+    expect(hide(), isTrue);
+    expect(hide(menuOpen: true), isFalse);
+    expect(hide(searchFocused: true), isFalse);
+    expect(hide(queryActive: true), isFalse);
+    expect(hide(selecting: true), isFalse);
+    expect(hide(enabled: false), isFalse);
+    expect(hide(visible: false), isFalse);
+  });
+
   test('resetting the immersive tracker requires a new sustained burst', () {
     final tracker = FastScrollTracker();
     for (var i = 0; i <= 5; i++) {

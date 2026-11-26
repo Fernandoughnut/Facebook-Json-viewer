@@ -168,6 +168,23 @@ class FastScrollTracker {
   }
 }
 
+/// True when a scroll should dismiss the floating immersive controls. An open
+/// menu must keep them mounted, otherwise the menu's own owner disappears.
+bool shouldAutoHideImmersiveControls({
+  required bool enabled,
+  required bool menuOpen,
+  required bool visible,
+  required bool queryActive,
+  required bool searchFocused,
+  required bool selecting,
+}) =>
+    enabled &&
+    !menuOpen &&
+    visible &&
+    !queryActive &&
+    !searchFocused &&
+    !selecting;
+
 /// Name shown in the UI: the alias if one was set, otherwise the export's name.
 String displayName(String name) => gSettings?.aliasFor(name) ?? name;
 

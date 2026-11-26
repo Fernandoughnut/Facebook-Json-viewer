@@ -37,6 +37,8 @@ Planned next:
   message text, and only chats that received new messages are re-sorted.
 - Stale and interrupted parse cache files are pruned on startup, the media-stat
   cache is bounded, and `.part` / `.tmp` files are ignored by media scanning.
+- The "Open conversations at" setting uses a dropdown on narrow screens, so all
+  three choices fit without sideways scrolling.
 
 ### Fixed
 
@@ -48,7 +50,9 @@ Planned next:
   flick.
 - The floating immersive pill no longer reserves header space, so entering or
   leaving immersive mode never resizes the conversation.
-- Settings search now finds Immersive mode.
+- The immersive overflow menu no longer closes itself when you scroll inside
+  it: floating controls stay pinned until the menu closes.
+- Settings search now finds Immersive mode and the start-position options.
 
 ## [1.3.0] - 2026-11-26
 

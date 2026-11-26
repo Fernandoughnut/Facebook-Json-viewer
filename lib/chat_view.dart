@@ -392,6 +392,7 @@ class _ChatViewState extends State<ChatView> {
   bool _immersiveSearchExpanded = false;
   Timer? _immersiveBarTimer;
   Timer? _immersiveControlsTimer;
+  bool _immersiveMenuOpen = false;
   final FastScrollTracker _fastScroll = FastScrollTracker();
 
   double? _lastScrollPixels;
@@ -783,12 +784,29 @@ class _ChatViewState extends State<ChatView> {
     _immersiveControlsTimer?.cancel();
     _immersiveControlsTimer = Timer(delay, () {
       if (!mounted || !settings.immersiveMode) return;
-      if (query.isNotEmpty || searchFocus.hasFocus || selecting) {
+      if (_immersiveMenuOpen ||
+          query.isNotEmpty ||
+          searchFocus.hasFocus ||
+          selecting) {
         _scheduleImmersiveControlsHide();
         return;
       }
       _hideImmersiveControls();
     });
+  }
+
+  /// A scroll inside the overflow menu must never remove the widget that owns
+  /// that menu. Keep the controls pinned while it is open.
+  void _immersiveMenuOpened() {
+    _immersiveMenuOpen = true;
+    _immersiveControlsTimer?.cancel();
+  }
+
+  void _immersiveMenuClosed() {
+    _immersiveMenuOpen = false;
+    if (mounted && settings.immersiveMode) {
+      _scheduleImmersiveControlsHide(const Duration(seconds: 2));
+    }
   }
 
   void revealImmersiveControls() {
@@ -838,6 +856,7 @@ class _ChatViewState extends State<ChatView> {
   void toggleImmersive() {
     settings.update(() => settings.immersiveMode = !settings.immersiveMode);
     _immersiveSearchExpanded = false;
+    _immersiveMenuOpen = false;
     _fastScroll.reset();
     _immersiveBarTimer?.cancel();
     _immersiveBarVisible.value = false;
@@ -859,11 +878,14 @@ class _ChatViewState extends State<ChatView> {
 
     if (n is ScrollUpdateNotification) {
       _trackFastScroll(now, pixels);
-      if (settings.immersiveMode &&
-          _immersiveControlsVisible.value &&
-          query.isEmpty &&
-          !searchFocus.hasFocus &&
-          !selecting) {
+      if (shouldAutoHideImmersiveControls(
+        enabled: settings.immersiveMode,
+        menuOpen: _immersiveMenuOpen,
+        visible: _immersiveControlsVisible.value,
+        queryActive: query.isNotEmpty,
+        searchFocused: searchFocus.hasFocus,
+        selecting: selecting,
+      )) {
         _hideImmersiveControls();
       }
     } else {
@@ -1661,6 +1683,8 @@ class _ChatViewState extends State<ChatView> {
         gallery;
     return MenuAnchor(
       controller: _menuController,
+      onOpen: _immersiveMenuOpened,
+      onClose: _immersiveMenuClosed,
       alignmentOffset: const Offset(0, 8),
       style: _roundedMenuStyle(
         alignment: AlignmentDirectional.bottomEnd,
@@ -2757,7 +2781,12 @@ class _ChatViewState extends State<ChatView> {
             ? Theme.of(context).colorScheme.primary
             : null,
       ),
-      onSelected: handleMenu,
+      onOpened: _immersiveMenuOpened,
+      onCanceled: _immersiveMenuClosed,
+      onSelected: (value) {
+        _immersiveMenuClosed();
+        handleMenu(value);
+      },
       itemBuilder: (_) => [
         _menuSection('SEARCH'),
         PopupMenuItem<Object>(
