@@ -9,6 +9,20 @@ import 'package:fb_viewer/media_pack.dart';
 import 'package:fb_viewer/models.dart';
 
 void main() {
+  test('pack file names are stable and avoid same-second collisions', () {
+    final first = mediaPackFileName(
+      'Friends',
+      DateTime(2024, 1, 2, 3, 4, 5, 678),
+    );
+    final second = mediaPackFileName(
+      'Friends',
+      DateTime(2024, 1, 2, 3, 4, 5, 679),
+    );
+
+    expect(first, 'Friends_media_2024-01-02_030405_678.zip');
+    expect(second, 'Friends_media_2024-01-02_030405_679.zip');
+  });
+
   test('packed names cannot escape the archive or disappear', () {
     expect(packFileName(r'..\hash.jpg'), '_hash.jpg');
     expect(packFileName('/tmp/hash.jpg'), '_tmp_hash.jpg');

@@ -52,6 +52,11 @@ Planned next:
 
 ### Fixed
 
+- Media ZIP names include milliseconds, so packing twice in the same second no
+  longer overwrites the first archive.
+- Android export progress listeners are now shared safely; finishing one pack
+  no longer stops progress updates for another.
+- Pack confirmation and success messages use proper singular/plural wording.
 - Overlapping imports still dedupe correctly after the compact index change.
 - Only the position bar's pill itself is hit-testable now. Touching the empty
   track no longer jumps immediately or steals Android gesture Back swipes.

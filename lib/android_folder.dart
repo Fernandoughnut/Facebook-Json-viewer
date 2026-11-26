@@ -79,6 +79,24 @@ class AndroidMediaExport {
   static const MethodChannel _channel = MethodChannel(
     'dev.local.indexed/export',
   );
+  static final Map<String, void Function(Map<String, dynamic>)> _listeners =
+      <String, void Function(Map<String, dynamic>)>{};
+  static bool _listening = false;
+
+  /// One channel handler serves every export. Clearing the handler when one
+  /// export finishes would silently drop progress for any later export.
+  static void _ensureListener() {
+    if (_listening) return;
+    _listening = true;
+    _channel.setMethodCallHandler((call) async {
+      if (call.method != 'exportProgress') return;
+      final args = call.arguments;
+      if (args is! Map) return;
+      final id = args['exportId'] as String?;
+      if (id == null) return;
+      _listeners[id]?.call(Map<String, dynamic>.from(args));
+    });
+  }
 
   /// Picks a folder with write permission. Returns a content:// tree URI.
   static Future<String?> pickFolder() async {
@@ -99,13 +117,8 @@ class AndroidMediaExport {
     void Function(Map<String, dynamic>)? onProgress,
   }) async {
     final exportId = DateTime.now().microsecondsSinceEpoch.toString();
-    _channel.setMethodCallHandler((call) async {
-      if (call.method != 'exportProgress') return;
-      final args = call.arguments;
-      if (args is Map && args['exportId'] == exportId) {
-        onProgress?.call(Map<String, dynamic>.from(args));
-      }
-    });
+    _ensureListener();
+    if (onProgress != null) _listeners[exportId] = onProgress;
     try {
       final result = await _channel.invokeMapMethod<String, dynamic>(
         'writeFileToFolder',
@@ -124,7 +137,7 @@ class AndroidMediaExport {
         'error': e.message ?? 'Media export is unavailable',
       };
     } finally {
-      _channel.setMethodCallHandler(null);
+      _listeners.remove(exportId);
     }
   }
 }

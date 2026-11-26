@@ -156,7 +156,16 @@ Map<String, dynamic> mediaPackManifest({
 
 String _packStamp(DateTime now) =>
     '${now.year}-${two(now.month)}-${two(now.day)}'
-    '_${two(now.hour)}${two(now.minute)}${two(now.second)}';
+    '_${two(now.hour)}${two(now.minute)}${two(now.second)}'
+    '_${now.millisecond.toString().padLeft(3, '0')}';
+
+/// Milliseconds matter here: packing twice in the same second must not
+/// silently overwrite the first archive.
+String mediaPackFileName(String title, DateTime now) =>
+    '${safeFileName(title)}_media_${_packStamp(now)}.zip';
+
+String _count(int n, String singular, String plural) =>
+    '$n ${n == 1 ? singular : plural}';
 
 /// Runs off the UI thread. Media is STORED, not deflated: photos and videos
 /// are already compressed, and streaming avoids loading a whole file at once.
@@ -216,9 +225,9 @@ Future<void> packConversationMedia(
     builder: (ctx) => AlertDialog(
       title: const Text('Pack conversation media'),
       content: Text(
-        '${plan.files.length} referenced file(s), '
-        '${plan.references.length} reference(s).'
-        '${plan.missing.isEmpty ? '' : ' ${plan.missing.length} reference(s) are missing.'}\n\n'
+        '${_count(plan.files.length, 'referenced file', 'referenced files')}, '
+        '${_count(plan.references.length, 'reference', 'references')}.'
+        '${plan.missing.isEmpty ? '' : ' ${_count(plan.missing.length, 'reference is', 'references are')} missing.'}\n\n'
         'The ZIP will contain the original bytes, a conversation.json export '
         'and a manifest mapping the hashed file names to readable ones.',
       ),
@@ -241,9 +250,7 @@ Future<void> packConversationMedia(
       : await _pickDesktopFolder();
   if (folder == null || !context.mounted) return;
 
-  final now = DateTime.now();
-  final stamp = _packStamp(now);
-  final fileName = '${safeFileName(chat.title)}_media_$stamp.zip';
+  final fileName = mediaPackFileName(chat.title, DateTime.now());
   final cache = Directory('${store.settings.cacheDir}/exports');
   final zipPath = '${cache.path}${Platform.pathSeparator}$fileName';
   final progress = ValueNotifier<String>('Preparing $fileName…');
@@ -307,7 +314,7 @@ Future<void> packConversationMedia(
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            'Saved $fileName ($written file(s)'
+            'Saved $fileName (${_count(written, 'file', 'files')}'
             '${plan.missing.isEmpty ? '' : ', ${plan.missing.length} missing'})',
           ),
         ),
