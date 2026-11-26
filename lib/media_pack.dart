@@ -18,12 +18,42 @@ import 'models.dart';
 import 'store.dart';
 import 'util.dart';
 
+/// How media is named inside a conversation ZIP.
+enum MediaNamingMode {
+  /// Keep the exported names and folder structure so the files can be added
+  /// back as a media folder and matched to the unchanged conversation JSON.
+  originalSorted,
+
+  /// Human-readable `YYYY-MM-DD_Sender_original` names. Pretty to browse, but
+  /// the original URIs no longer match unless the manifest is used to restore.
+  readableDate,
+}
+
+MediaNamingMode mediaNamingFrom(String? value) => switch (value) {
+  'readableDate' => MediaNamingMode.readableDate,
+  _ => MediaNamingMode.originalSorted,
+};
+
+class MediaPackOptions {
+  final MediaNamingMode naming;
+  final bool keepDuplicateReferences;
+
+  const MediaPackOptions({
+    this.naming = MediaNamingMode.originalSorted,
+    this.keepDuplicateReferences = false,
+  });
+}
+
 /// One physical file that will be placed in the archive.
 class MediaPackFile {
   final String path;
-  final String name;
 
-  const MediaPackFile(this.path, this.name);
+  /// Archive-relative path, always starting with `media/`.
+  final String name;
+  final int? timestamp;
+  final int order;
+
+  const MediaPackFile(this.path, this.name, {this.timestamp, this.order = 0});
 }
 
 /// One media reference from the conversation, mapped to its packed file.
@@ -61,35 +91,100 @@ class MediaPackPlan {
   final List<MediaPackFile> files;
   final List<MediaPackReference> references;
   final List<String> missing;
+  final List<String> unreadable;
+  final int duplicateReferences;
+  final int emptyReferences;
+  final MediaNamingMode naming;
+  final bool keepDuplicateReferences;
 
   const MediaPackPlan({
     required this.files,
     required this.references,
     required this.missing,
+    this.unreadable = const <String>[],
+    this.duplicateReferences = 0,
+    this.emptyReferences = 0,
+    this.naming = MediaNamingMode.readableDate,
+    this.keepDuplicateReferences = false,
   });
+
+  MediaPackPlan copyWith({
+    List<MediaPackFile>? files,
+    List<String>? missing,
+    List<String>? unreadable,
+  }) => MediaPackPlan(
+    files: files ?? this.files,
+    references: references,
+    missing: missing ?? this.missing,
+    unreadable: unreadable ?? this.unreadable,
+    duplicateReferences: duplicateReferences,
+    emptyReferences: emptyReferences,
+    naming: naming,
+    keepDuplicateReferences: keepDuplicateReferences,
+  );
 }
 
-/// Makes a name safe both inside a ZIP and on a normal filesystem. Leading
-/// dots are removed so a hash like ".." cannot become a parent path.
+/// Makes one archive path segment safe on every filesystem.
 String packFileName(String name) {
-  final cleaned = name.replaceAll(RegExp(r'[\\/:*?"<>|\r\n]'), '_').trim();
-  final noDots = cleaned.replaceFirst(RegExp(r'^\.+'), '');
-  return noDots.isEmpty ? 'media' : noDots;
+  var cleaned = name.replaceAll(RegExp(r'[\\/:*?"<>|\r\n]'), '_').trim();
+  cleaned = cleaned.replaceFirst(RegExp(r'^\.+'), '');
+  cleaned = cleaned.replaceFirst(RegExp(r'[. ]+$'), '');
+  if (cleaned.isEmpty) return 'media';
+  final reserved = RegExp(
+    r'^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$',
+    caseSensitive: false,
+  );
+  if (reserved.hasMatch(cleaned)) cleaned = '_$cleaned';
+  if (cleaned.length > 180) cleaned = cleaned.substring(0, 180);
+  return cleaned;
+}
+
+/// Preserve the relative path from the JSON where possible. Keeping `media/`
+/// intact means an extracted pack can be added straight back as a media folder.
+String _archivePathForUri(String uri) {
+  var clean = uri.replaceAll('\\', '/');
+  final cut = clean.indexOf(RegExp(r'[?#]'));
+  if (cut >= 0) clean = clean.substring(0, cut);
+  final parts = clean
+      .split('/')
+      .where((p) => p.isNotEmpty && p != '.' && p != '..')
+      .map(packFileName)
+      .toList();
+  if (parts.isEmpty) return 'media/media';
+  if (parts.first.toLowerCase() == 'media') return parts.join('/');
+  return 'media/${parts.join('/')}';
 }
 
 String _withSuffix(String base, int n) {
-  final dot = base.lastIndexOf('.');
-  if (dot <= 0) return '${base}_$n';
-  return '${base.substring(0, dot)}_$n${base.substring(dot)}';
+  final slash = base.lastIndexOf('/');
+  final prefix = slash < 0 ? '' : base.substring(0, slash + 1);
+  final name = slash < 0 ? base : base.substring(slash + 1);
+  final dot = name.lastIndexOf('.');
+  final tagged = dot <= 0
+      ? '${name}_$n'
+      : '${name.substring(0, dot)}_$n${name.substring(dot)}';
+  return '$prefix$tagged';
 }
 
-/// Plans a conversation-only media pack. Duplicate references to the same
-/// physical file are packed once; the manifest still records every reference.
+String _allocateName(String base, Set<String> used) {
+  var candidate = base;
+  var n = 1;
+  // ZIP tools on Windows/macOS are case-insensitive too.
+  while (!used.add(candidate.toLowerCase())) {
+    candidate = _withSuffix(base, n++);
+  }
+  return candidate;
+}
+
+/// Plans a conversation-only media pack. By default each physical file is
+/// packed once; [MediaPackOptions.keepDuplicateReferences] can instead keep one
+/// entry per reference. Every reference is still recorded in the manifest.
 MediaPackPlan planMediaPack(
   Iterable<Msg> messages, {
   required String? Function(String uri) findMedia,
   required String Function(int? timestamp) dateLabel,
   String Function(String sender)? displayName,
+  MediaPackOptions options = const MediaPackOptions(),
 }) {
   final list = messages.toList();
   final files = <MediaPackFile>[];
@@ -97,29 +192,52 @@ MediaPackPlan planMediaPack(
   final missing = <String>[];
   final nameForPath = <String, String>{};
   final usedNames = <String>{};
+  var duplicateReferences = 0;
+  var emptyReferences = 0;
 
   for (var i = 0; i < list.length; i++) {
     final m = list[i];
     for (final x in m.media) {
-      if (x.uri.isEmpty) continue;
+      if (x.uri.trim().isEmpty) {
+        emptyReferences++;
+        continue;
+      }
       final path = findMedia(x.uri);
       final sender = displayName?.call(m.sender) ?? m.sender;
       if (path == null) {
         missing.add(x.name.isEmpty ? x.uri : x.name);
         continue;
       }
-      final packed = nameForPath.putIfAbsent(path, () {
-        final base =
-            '${dateLabel(m.t)}_${packFileName(sender)}_${packFileName(x.name)}';
-        var candidate = base;
-        var n = 1;
-        while (usedNames.contains(candidate)) {
-          candidate = _withSuffix(base, n++);
-        }
-        usedNames.add(candidate);
-        files.add(MediaPackFile(path, candidate));
-        return candidate;
-      });
+
+      final previous = nameForPath[path];
+      if (previous != null && !options.keepDuplicateReferences) {
+        duplicateReferences++;
+        references.add(
+          MediaPackReference(
+            messageIndex: i,
+            sender: sender,
+            timestamp: m.t,
+            kind: x.kind,
+            uri: x.uri,
+            originalName: x.name,
+            packedAs: previous,
+          ),
+        );
+        continue;
+      }
+
+      final base = options.naming == MediaNamingMode.readableDate
+          ? 'media/${dateLabel(m.t)}_${packFileName(sender)}_${packFileName(x.name)}'
+          : _archivePathForUri(x.uri);
+      final packed = _allocateName(base, usedNames);
+      final file = MediaPackFile(
+        path,
+        packed,
+        timestamp: m.t,
+        order: files.length,
+      );
+      files.add(file);
+      nameForPath.putIfAbsent(path, () => packed);
       references.add(
         MediaPackReference(
           messageIndex: i,
@@ -128,12 +246,54 @@ MediaPackPlan planMediaPack(
           kind: x.kind,
           uri: x.uri,
           originalName: x.name,
-          packedAs: 'media/$packed',
+          packedAs: packed,
         ),
       );
     }
   }
-  return MediaPackPlan(files: files, references: references, missing: missing);
+
+  // "Sorted" must be explicit: a filtered message list is not necessarily in
+  // date order, and ZIP entry order is what users see when they open it.
+  files.sort((a, b) {
+    final at = a.timestamp ?? 0x7fffffffffffffff;
+    final bt = b.timestamp ?? 0x7fffffffffffffff;
+    final byDate = at.compareTo(bt);
+    return byDate != 0 ? byDate : a.order.compareTo(b.order);
+  });
+
+  return MediaPackPlan(
+    files: files,
+    references: references,
+    missing: missing,
+    duplicateReferences: duplicateReferences,
+    emptyReferences: emptyReferences,
+    naming: options.naming,
+    keepDuplicateReferences: options.keepDuplicateReferences,
+  );
+}
+
+/// Drops paths that vanished after the media folder was indexed so the ZIP and
+/// its manifest cannot disagree about which files are actually included.
+MediaPackPlan pruneUnreadableMediaPack(MediaPackPlan plan) {
+  final kept = <MediaPackFile>[];
+  final unreadable = <String>[...plan.unreadable];
+  for (final f in plan.files) {
+    if (File(f.path).existsSync()) {
+      kept.add(f);
+    } else if (!unreadable.contains(f.name)) {
+      unreadable.add(f.name);
+    }
+  }
+  if (unreadable.length == plan.unreadable.length) return plan;
+
+  final missing = <String>[...plan.missing];
+  for (final ref in plan.references) {
+    if (unreadable.contains(ref.packedAs)) {
+      final name = ref.originalName.isEmpty ? ref.uri : ref.originalName;
+      if (name.isNotEmpty && !missing.contains(name)) missing.add(name);
+    }
+  }
+  return plan.copyWith(files: kept, missing: missing, unreadable: unreadable);
 }
 
 /// A small manifest makes the hashed export names traceable without forcing
@@ -146,10 +306,15 @@ Map<String, dynamic> mediaPackManifest({
   'format': 'indexed-media-pack/1',
   'exportedAt': DateTime.now().toIso8601String(),
   'conversation': <String, dynamic>{'title': title, 'key': key},
+  'naming': plan.naming.name,
+  'order': 'chronological',
   'fileCount': plan.files.length,
   'referenceCount': plan.references.length,
+  'duplicateReferences': plan.duplicateReferences,
+  'emptyReferences': plan.emptyReferences,
   'missingCount': plan.missing.length,
-  'files': [for (final f in plan.files) 'media/${f.name}'],
+  'unreadableAtPackTime': plan.unreadable,
+  'files': [for (final f in plan.files) f.name],
   'references': [for (final r in plan.references) r.toJson()],
   'missing': plan.missing,
 };
@@ -169,10 +334,11 @@ String _count(int n, String singular, String plural) =>
 
 /// Runs off the UI thread. Media is STORED, not deflated: photos and videos
 /// are already compressed, and streaming avoids loading a whole file at once.
-Future<int> buildMediaZip(Map<String, dynamic> args) async {
+Future<Map<String, dynamic>> buildMediaZip(Map<String, dynamic> args) async {
   final encoder = ZipFileEncoder();
   encoder.create(args['zipPath'] as String);
   var written = 0;
+  final skipped = <String>[];
   try {
     final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     for (final entry in (args['documents'] as List).cast<List<String>>()) {
@@ -183,14 +349,17 @@ Future<int> buildMediaZip(Map<String, dynamic> args) async {
     }
     for (final raw in (args['files'] as List).cast<List<String>>()) {
       final source = File(raw[0]);
-      if (!source.existsSync()) continue;
+      if (!source.existsSync()) {
+        skipped.add(raw[1]);
+        continue;
+      }
       encoder.addFile(source, raw[1], ZipFileEncoder.STORE);
       written++;
     }
   } finally {
     await encoder.close();
   }
-  return written;
+  return <String, dynamic>{'written': written, 'skipped': skipped};
 }
 
 /// Build a ZIP for one conversation and save it where the user chooses.
@@ -202,13 +371,134 @@ Future<void> packConversationMedia(
   Iterable<Msg>? messages,
 }) async {
   final msgs = (messages ?? chat.messages).toList();
-  final plan = planMediaPack(
+  final mediaLookup = <String, String?>{};
+  String? findCached(String uri) =>
+      mediaLookup.putIfAbsent(uri, () => store.findMedia(uri, chat));
+
+  MediaPackPlan planFor(MediaPackOptions options) => planMediaPack(
     msgs,
-    findMedia: (uri) => store.findMedia(uri, chat),
+    findMedia: findCached,
     dateLabel: fmtDate,
     displayName: displayName,
+    options: options,
   );
 
+  var chosen = MediaPackOptions(
+    naming: mediaNamingFrom(store.settings.mediaPackNaming),
+  );
+  MediaPackPlan preview = planFor(chosen);
+  final options = await showDialog<MediaPackOptions?>(
+    context: context,
+    builder: (ctx) => StatefulBuilder(
+      builder: (ctx, setState) {
+        preview = planFor(chosen);
+        final missingNote = preview.missing.isEmpty
+            ? ''
+            : ' ${_count(preview.missing.length, 'reference is', 'references are')} missing.';
+        final emptyNote = preview.emptyReferences == 0
+            ? ''
+            : ' ${_count(preview.emptyReferences, 'empty reference', 'empty references')} skipped.';
+        final unreadableNote = preview.unreadable.isEmpty
+            ? ''
+            : ' ${_count(preview.unreadable.length, 'file', 'files')} vanished after indexing.';
+        final duplicateNote = preview.duplicateReferences == 0
+            ? ''
+            : chosen.keepDuplicateReferences
+            ? ' ${_count(preview.duplicateReferences, 'repeated reference', 'repeated references')} kept as separate copies.'
+            : ' ${_count(preview.duplicateReferences, 'repeated reference', 'repeated references')} point to files already packed.';
+        return AlertDialog(
+          title: const Text('Pack conversation media'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '${_count(preview.references.length, 'reference', 'references')} → '
+                  '${_count(preview.files.length, 'file', 'files')}.'
+                  '$duplicateNote$missingNote$emptyNote$unreadableNote',
+                ),
+                const SizedBox(height: 12),
+                const Text('Media names'),
+                ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(
+                    chosen.naming == MediaNamingMode.originalSorted
+                        ? Icons.radio_button_checked
+                        : Icons.radio_button_unchecked,
+                  ),
+                  onTap: () => setState(
+                    () => chosen = MediaPackOptions(
+                      naming: MediaNamingMode.originalSorted,
+                      keepDuplicateReferences: chosen.keepDuplicateReferences,
+                    ),
+                  ),
+                  title: const Text('Original names, sorted by date'),
+                  subtitle: const Text(
+                    'media/<original path>; can be added back as a media folder.',
+                  ),
+                ),
+                ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(
+                    chosen.naming == MediaNamingMode.readableDate
+                        ? Icons.radio_button_checked
+                        : Icons.radio_button_unchecked,
+                  ),
+                  onTap: () => setState(
+                    () => chosen = MediaPackOptions(
+                      naming: MediaNamingMode.readableDate,
+                      keepDuplicateReferences: chosen.keepDuplicateReferences,
+                    ),
+                  ),
+                  title: const Text('Date + sender names'),
+                  subtitle: const Text(
+                    'YYYY-MM-DD_Sender_original; nicer to browse, not re-importable.',
+                  ),
+                ),
+                CheckboxListTile(
+                  dense: true,
+                  value: chosen.keepDuplicateReferences,
+                  onChanged: (v) => setState(
+                    () => chosen = MediaPackOptions(
+                      naming: chosen.naming,
+                      keepDuplicateReferences: v ?? false,
+                    ),
+                  ),
+                  title: const Text('Pack repeated references separately'),
+                  subtitle: const Text(
+                    'One ZIP entry per reference, even when it is the same file.',
+                  ),
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  'The ZIP stores the original bytes, conversation.json and a '
+                  'manifest mapping every hashed URI to its packed file.',
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, chosen),
+              child: const Text('Choose folder'),
+            ),
+          ],
+        );
+      },
+    ),
+  );
+  if (options == null || !context.mounted) return;
+
+  store.settings.mediaPackNaming = options.naming.name;
+  store.settings.save();
+  final plan = pruneUnreadableMediaPack(preview);
   if (plan.files.isEmpty) {
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -219,31 +509,6 @@ Future<void> packConversationMedia(
     }
     return;
   }
-
-  final pack = await showDialog<bool>(
-    context: context,
-    builder: (ctx) => AlertDialog(
-      title: const Text('Pack conversation media'),
-      content: Text(
-        '${_count(plan.files.length, 'referenced file', 'referenced files')}, '
-        '${_count(plan.references.length, 'reference', 'references')}.'
-        '${plan.missing.isEmpty ? '' : ' ${_count(plan.missing.length, 'reference is', 'references are')} missing.'}\n\n'
-        'The ZIP will contain the original bytes, a conversation.json export '
-        'and a manifest mapping the hashed file names to readable ones.',
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(ctx, false),
-          child: const Text('Cancel'),
-        ),
-        FilledButton(
-          onPressed: () => Navigator.pop(ctx, true),
-          child: const Text('Choose folder'),
-        ),
-      ],
-    ),
-  );
-  if (pack != true || !context.mounted) return;
 
   final folder = Platform.isAndroid
       ? await AndroidMediaExport.pickFolder()
@@ -276,20 +541,22 @@ Future<void> packConversationMedia(
       '  ',
     ).convert(mediaPackManifest(title: chat.title, key: chat.key, plan: plan));
     progress.value = 'Packing ${plan.files.length} file(s)…';
-    final written = await compute(buildMediaZip, <String, dynamic>{
+    final result = await compute(buildMediaZip, <String, dynamic>{
       'zipPath': zipPath,
       'documents': [
         ['conversation.json', conversationJson],
         ['manifest.json', manifestJson],
       ],
       'files': [
-        for (final f in plan.files) [f.path, 'media/${f.name}'],
+        for (final f in plan.files) [f.path, f.name],
       ],
     });
+    final written = result['written'] as int? ?? 0;
+    final skipped = (result['skipped'] as List?)?.cast<String>() ?? const [];
 
     progress.value = 'Saving $fileName…';
     if (Platform.isAndroid) {
-      final result = await AndroidMediaExport.writeFile(
+      final save = await AndroidMediaExport.writeFile(
         folder,
         zipPath,
         fileName,
@@ -301,7 +568,7 @@ Future<void> packConversationMedia(
               : 'Saving $fileName…';
         },
       );
-      final error = result['error'];
+      final error = save['error'];
       if (error != null) throw Exception(error);
     } else {
       final dest = Directory(folder);
@@ -315,7 +582,8 @@ Future<void> packConversationMedia(
         SnackBar(
           content: Text(
             'Saved $fileName (${_count(written, 'file', 'files')}'
-            '${plan.missing.isEmpty ? '' : ', ${plan.missing.length} missing'})',
+            '${plan.missing.isEmpty ? '' : ', ${plan.missing.length} missing'}'
+            '${skipped.isEmpty ? '' : ', ${skipped.length} vanished'})',
           ),
         ),
       );

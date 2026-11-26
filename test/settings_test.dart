@@ -160,6 +160,27 @@ void main() {
     expect(reloaded.removedChats, contains('chat-b'));
   });
 
+  test('media pack naming choice persists', () async {
+    final dir = await Directory.systemTemp.createTemp(
+      'indexed_pack_setting_test_',
+    );
+    addTearDown(() {
+      if (dir.existsSync()) dir.deleteSync(recursive: true);
+    });
+    final settings = AppSettings(configDir: dir.path);
+    addTearDown(settings.dispose);
+    await settings.load();
+    expect(settings.mediaPackNaming, 'originalSorted');
+
+    settings.mediaPackNaming = 'readableDate';
+    await settings.flush();
+
+    final reloaded = AppSettings(configDir: dir.path);
+    addTearDown(reloaded.dispose);
+    await reloaded.load();
+    expect(reloaded.mediaPackNaming, 'readableDate');
+  });
+
   test(
     'aliases and notes reload from their values, not MapEntry.toString()',
     () async {

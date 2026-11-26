@@ -137,6 +137,8 @@ class AppSettings extends ChangeNotifier {
   bool keepRaw = true; // turn off to trade "Message details" for lower RAM use
   bool dedupeImports =
       true; // overlapping exports often contain the same messages
+  String mediaPackNaming =
+      'originalSorted'; // last conversation ZIP naming choice
   bool lockEnabled = false; // local PIN gate, for shared devices
   String lockHash = ''; // salted SHA-256 of the PIN
   String lockSalt = '';
@@ -397,6 +399,7 @@ class AppSettings extends ChangeNotifier {
     'useParseCache': useParseCache,
     'keepRaw': keepRaw,
     'dedupeImports': dedupeImports,
+    'mediaPackNaming': mediaPackNaming,
     'lockEnabled': lockEnabled,
     'lockHash': lockHash,
     'lockSalt': lockSalt,
@@ -463,6 +466,10 @@ class AppSettings extends ChangeNotifier {
     useParseCache = j['useParseCache'] as bool? ?? useParseCache;
     keepRaw = j['keepRaw'] as bool? ?? keepRaw;
     dedupeImports = j['dedupeImports'] as bool? ?? dedupeImports;
+    final naming = j['mediaPackNaming'];
+    if (naming == 'originalSorted' || naming == 'readableDate') {
+      mediaPackNaming = naming;
+    }
     lockEnabled = j['lockEnabled'] as bool? ?? lockEnabled;
     lockHash = '${j['lockHash'] ?? ''}';
     lockSalt = '${j['lockSalt'] ?? ''}';

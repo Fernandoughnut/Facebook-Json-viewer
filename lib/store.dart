@@ -171,25 +171,90 @@ class Store extends ChangeNotifier {
 
   // ---- media lookup: the conversation's own folders first, then the shared ones ----
 
+  static String _uriKey(String value) {
+    final parts = <String>[];
+    for (final part in value.replaceAll('\\', '/').split('/')) {
+      if (part.isEmpty || part == '.' || part == '..') continue;
+      parts.add(part);
+    }
+    return parts.join('/').toLowerCase();
+  }
+
+  static bool _isMediaFile(String path) {
+    try {
+      return File(path).statSync().type == FileSystemEntityType.file;
+    } catch (_) {
+      return false;
+    }
+  }
+
   ({String path, bool fromChat})? _find(String uri, Chat? chat) {
     if (uri.isEmpty) return null;
-    final base = uri.split(pathSep).last;
-    final lower = base.toLowerCase();
-    String? decoded;
-    if (base.contains('%')) {
-      try {
-        decoded = Uri.decodeComponent(base).toLowerCase();
-      } catch (_) {}
+    final key = _uriKey(uri);
+    String? decodedKey;
+    try {
+      decodedKey = _uriKey(Uri.decodeComponent(uri));
+    } catch (_) {}
+    final base = key.split('/').last;
+    final decodedBase = decodedKey?.split('/').last;
+    // Relative path first, then the old basename fallback. That makes
+    // `photos/a.jpg` and `videos/a.jpg` resolve to different files.
+    final candidates = <String>{
+      if (key.isNotEmpty) key,
+      if (decodedKey != null && decodedKey.isNotEmpty) decodedKey,
+      if (base.isNotEmpty) base,
+      if (decodedBase != null && decodedBase.isNotEmpty) decodedBase,
+    }.toList();
+    final checked = <String>{};
+
+    String? lookup(MediaDir d) {
+      String? fromCandidate(String candidate) {
+        final direct = d.paths[candidate];
+        if (direct != null && checked.add(direct) && _isMediaFile(direct)) {
+          return direct;
+        }
+        // An originalSorted pack keeps the relative folders under `media/`.
+        // Match the tail of the URI before falling back to a basename so two
+        // different `a.jpg` files can stay distinct.
+        if (candidate.contains('/') && d.paths.isNotEmpty) {
+          final suffix = '/$candidate';
+          final matches = <MapEntry<String, String>>[];
+          for (final e in d.paths.entries) {
+            if (e.key.endsWith(suffix)) matches.add(e);
+          }
+          matches.sort((a, b) {
+            final byLength = a.key.length.compareTo(b.key.length);
+            return byLength != 0 ? byLength : a.key.compareTo(b.key);
+          });
+          for (final e in matches) {
+            if (checked.add(e.value) && _isMediaFile(e.value)) return e.value;
+          }
+        }
+        // Old flat media folders only have a basename index.
+        final name = candidate.split('/').last;
+        final byName = d.files[name] ?? d.files[candidate];
+        if (byName != null && checked.add(byName) && _isMediaFile(byName)) {
+          return byName;
+        }
+        return null;
+      }
+
+      for (final candidate in candidates) {
+        final path = fromCandidate(candidate);
+        if (path != null) return path;
+      }
+      return null;
     }
+
     if (chat != null) {
       for (final d in chat.dirs) {
-        final p = d.files[lower] ?? (decoded == null ? null : d.files[decoded]);
-        if (p != null) return (path: p, fromChat: true);
+        final path = lookup(d);
+        if (path != null) return (path: path, fromChat: true);
       }
     }
     for (final d in sharedDirs) {
-      final p = d.files[lower] ?? (decoded == null ? null : d.files[decoded]);
-      if (p != null) return (path: p, fromChat: false);
+      final path = lookup(d);
+      if (path != null) return (path: path, fromChat: false);
     }
     return null;
   }
@@ -391,10 +456,15 @@ class Store extends ChangeNotifier {
     return target.path;
   }
 
-  Future<void> addJsonFiles(List<String> paths, {bool remember = true}) async {
+  Future<void> addJsonFiles(
+    List<String> paths, {
+    bool remember = true,
+    bool reviveRemoved = false,
+  }) async {
     var added = 0;
     var duplicates = 0;
     var skippedRemoved = 0;
+    var prunedRememberedPath = false;
     final problems = <String>[];
     final seen = <int>{};
     final touched = <String>{};
@@ -411,7 +481,10 @@ class Store extends ChangeNotifier {
       for (final picked in paths) {
         final path = await _persistJsonPath(picked);
         final name = path.split(pathSep).last;
-        if (_loadedPaths.contains(path)) continue;
+        // An explicit re-add must be re-read even if another chat from the
+        // same file is still loaded; the per-thread guard below prevents
+        // duplicate messages.
+        if (!reviveRemoved && _loadedPaths.contains(path)) continue;
         status = 'Reading $name…';
         notifyListeners();
         try {
@@ -429,13 +502,22 @@ class Store extends ChangeNotifier {
           }
           final activeKeys = <String>{};
           for (final t in threads) {
-            if (settings.removedChats.contains(t.key)) {
+            final wasRemoved = settings.removedChats.contains(t.key);
+            if (wasRemoved && !reviveRemoved) {
               skippedRemoved++;
               continue;
             }
+            if (wasRemoved) settings.removedChats.remove(t.key);
+            // A thread already loaded from this exact file is still an active
+            // owner: keep the file remembered, but do not merge it twice.
             activeKeys.add(t.key);
+            if (!wasRemoved &&
+                (_pathsForChat[t.key]?.contains(path) ?? false)) {
+              continue;
+            }
             touched.add(t.key);
-            _pathsForChat.putIfAbsent(t.key, () => <String>{}).add(path);
+            final owners = _pathsForChat.putIfAbsent(t.key, () => <String>{});
+            if (!owners.contains(path)) owners.add(path);
             final c = chats.putIfAbsent(t.key, () => Chat(t.key, t.title));
             c.participants.addAll(t.participants);
             for (final m in t.messages) {
@@ -456,8 +538,11 @@ class Store extends ChangeNotifier {
             if (remember && !settings.jsonPaths.contains(path)) {
               settings.jsonPaths.add(path);
             }
-          } else if (remember) {
-            settings.jsonPaths.remove(path);
+          } else {
+            // Even during restore (remember: false), a file whose only
+            // conversations are removed must not be retried every startup.
+            prunedRememberedPath |= settings.jsonPaths.remove(path);
+            _loadedPaths.remove(path);
           }
         } catch (e) {
           problems.add('$name: $e');
@@ -473,7 +558,7 @@ class Store extends ChangeNotifier {
     _mediaStats.clear();
     final replies = rebuildReplyIndex();
     dataRevision++;
-    if (remember) settings.save();
+    if (remember || prunedRememberedPath) settings.save();
     status =
         'Loaded $added messages.'
         '${duplicates > 0 ? ' Skipped $duplicates duplicates.' : ''}'
@@ -485,13 +570,16 @@ class Store extends ChangeNotifier {
 
   /// Open a media folder. With [chat] it belongs to that conversation only;
   /// without it, the folder is shared by every conversation.
-  static bool _sameFileMap(Map<String, String> a, Map<String, String> b) {
+  static bool _sameMap(Map<String, String> a, Map<String, String> b) {
     if (a.length != b.length) return false;
     for (final e in a.entries) {
       if (b[e.key] != e.value) return false;
     }
     return true;
   }
+
+  static bool _sameFileMap(MediaDir a, MediaDir b) =>
+      _sameMap(a.files, b.files) && _sameMap(a.paths, b.paths);
 
   Future<void> addMediaDir(
     String dir, {
@@ -501,9 +589,9 @@ class Store extends ChangeNotifier {
     status = 'Scanning $dir …';
     _busy++;
     notifyListeners();
-    Map<String, String> files;
+    late final MediaDirIndex index;
     try {
-      files = await scanInBackground(dir);
+      index = await scanInBackground(dir);
     } catch (e) {
       status = 'Could not scan $dir: $e';
       _busy--;
@@ -517,12 +605,12 @@ class Store extends ChangeNotifier {
     for (final d in previous) {
       // Re-picking the same folder must not invalidate media stats and the
       // gallery: on a large chat that is a full O(messages) rescan.
-      unchanged = _sameFileMap(d.files, files);
+      unchanged = _sameFileMap(d, MediaDir(dir, index.files, index.paths));
       break;
     }
     if (!unchanged) {
       list.removeWhere((d) => d.path == dir);
-      list.add(MediaDir(dir, files));
+      list.add(MediaDir(dir, index.files, index.paths));
       mediaVersion++;
     }
     if (remember) {
@@ -533,7 +621,7 @@ class Store extends ChangeNotifier {
       settings.save();
     }
     status =
-        'Indexed ${files.length} files from $dir '
+        'Indexed ${index.files.length} files from $dir '
         '${chat == null ? '(shared by all conversations)' : '(for "${chat.title}")'}.';
     notifyListeners();
   }

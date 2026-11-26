@@ -1,9 +1,11 @@
 // Store-level state that must not leak between conversations.
 
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fb_viewer/models.dart';
+import 'package:fb_viewer/parser.dart';
 import 'package:fb_viewer/settings.dart';
 import 'package:fb_viewer/store.dart';
 
@@ -220,7 +222,211 @@ void main() {
     expect(store.dataRevision, dataRevision);
     expect(store.bookmarked(), isEmpty);
   });
+
+  test('explicitly re-adding a JSON revives a removed conversation', () async {
+    final dir = await Directory.systemTemp.createTemp('indexed_revive_test_');
+    addTearDown(() {
+      if (dir.existsSync()) dir.deleteSync(recursive: true);
+    });
+    final settings = AppSettings(configDir: dir.path);
+    addTearDown(settings.dispose);
+    await settings.load();
+    final store = Store(settings);
+    addTearDown(store.dispose);
+
+    final json = File('${dir.path}/messages.json')
+      ..writeAsStringSync(
+        File('test/fixtures/test_message.json').readAsStringSync(),
+      );
+    await store.addJsonFiles([json.path]);
+    final chat = store.chats.values.single;
+    final key = chat.key;
+    final count = chat.messages.length;
+    expect(count, greaterThan(0));
+
+    store.removeChat(chat);
+    expect(store.chats, isEmpty);
+    expect(settings.removedChats, contains(key));
+    expect(settings.jsonPaths, isNot(contains(json.path)));
+
+    await store.addJsonFiles([json.path], reviveRemoved: true);
+    expect(store.chats[key], isNotNull);
+    expect(store.chats[key]!.messages, hasLength(count));
+    expect(settings.removedChats, isNot(contains(key)));
+    expect(settings.jsonPaths, contains(json.path));
+    expect(store.status, isNot(contains('Skipped')));
+
+    await settings.flush();
+    final reloaded = AppSettings(configDir: dir.path);
+    addTearDown(reloaded.dispose);
+    await reloaded.load();
+    expect(reloaded.removedChats, isNot(contains(key)));
+    expect(reloaded.jsonPaths, contains(json.path));
+  });
+
+  test('automatic restore still skips removed conversations', () async {
+    final dir = await Directory.systemTemp.createTemp('indexed_revive_test_');
+    addTearDown(() {
+      if (dir.existsSync()) dir.deleteSync(recursive: true);
+    });
+    final settings = AppSettings(configDir: dir.path);
+    addTearDown(settings.dispose);
+    await settings.load();
+    final store = Store(settings);
+    addTearDown(store.dispose);
+
+    final json = File('${dir.path}/messages.json')
+      ..writeAsStringSync(
+        File('test/fixtures/test_message.json').readAsStringSync(),
+      );
+    await store.addJsonFiles([json.path]);
+    final chat = store.chats.values.single;
+    final key = chat.key;
+    store.removeChat(chat);
+
+    // Simulate an older state file that still remembers the JSON path.
+    settings.jsonPaths.add(json.path);
+    await store.restoreSession();
+
+    expect(store.chats, isEmpty);
+    expect(settings.removedChats, contains(key));
+    expect(settings.jsonPaths, isNot(contains(json.path)));
+  });
+
+  test(
+    'explicit re-add revives only removed threads in a shared file',
+    () async {
+      for (final dedupe in [true, false]) {
+        final dir = await Directory.systemTemp.createTemp(
+          'indexed_multi_test_',
+        );
+        addTearDown(() {
+          if (dir.existsSync()) dir.deleteSync(recursive: true);
+        });
+        final settings = AppSettings(configDir: dir.path);
+        addTearDown(settings.dispose);
+        await settings.load();
+        settings.dedupeImports = dedupe;
+        final store = Store(settings);
+        addTearDown(store.dispose);
+
+        final json = File('${dir.path}/threads.json')
+          ..writeAsStringSync(_twoThreadJson());
+        await store.addJsonFiles([json.path]);
+        expect(store.chats.keys, unorderedEquals(['alpha-id', 'beta-id']));
+        final alphaCount = store.chats['alpha-id']!.messages.length;
+        final betaCount = store.chats['beta-id']!.messages.length;
+
+        store.removeChat(store.chats['beta-id']!);
+        expect(settings.removedChats, contains('beta-id'));
+        expect(settings.jsonPaths, contains(json.path));
+
+        await store.addJsonFiles([json.path], reviveRemoved: true);
+        expect(store.chats.keys, unorderedEquals(['alpha-id', 'beta-id']));
+        expect(store.chats['alpha-id']!.messages, hasLength(alphaCount));
+        expect(store.chats['beta-id']!.messages, hasLength(betaCount));
+        expect(settings.removedChats, isNot(contains('beta-id')));
+
+        // Re-picking the same file must not append a second copy.
+        await store.addJsonFiles([json.path], reviveRemoved: true);
+        expect(store.chats['alpha-id']!.messages, hasLength(alphaCount));
+        expect(store.chats['beta-id']!.messages, hasLength(betaCount));
+        expect(store.status, isNot(contains('Skipped')));
+      }
+    },
+  );
+
+  test(
+    'media lookup keeps same-named files in different folders distinct',
+    () async {
+      final dir = await Directory.systemTemp.createTemp('indexed_paths_test_');
+      addTearDown(() {
+        if (dir.existsSync()) dir.deleteSync(recursive: true);
+      });
+      final photos = Directory('${dir.path}/photos')
+        ..createSync(recursive: true);
+      final videos = Directory('${dir.path}/videos')
+        ..createSync(recursive: true);
+      final photo = File('${photos.path}/a.jpg')..writeAsStringSync('photo');
+      final video = File('${videos.path}/a.jpg')..writeAsStringSync('video');
+      final index = scanDirIndex(dir.path);
+      expect(index.files['a.jpg'], isNotNull);
+
+      final settings = AppSettings(configDir: dir.path);
+      addTearDown(settings.dispose);
+      await settings.load();
+      final store = Store(settings);
+      addTearDown(store.dispose);
+      final chat = Chat('paths', 'Paths');
+      chat.dirs.add(MediaDir(dir.path, index.files, index.paths));
+      store.chats[chat.key] = chat;
+
+      expect(store.findMedia('photos/a.jpg', chat), photo.path);
+      expect(store.findMedia('videos/a.jpg', chat), video.path);
+      expect(store.findMedia('a.jpg', chat), isNotNull);
+    },
+  );
+
+  test('a stale media folder does not shadow a valid one', () async {
+    final dir = await Directory.systemTemp.createTemp('indexed_stale_test_');
+    addTearDown(() {
+      if (dir.existsSync()) dir.deleteSync(recursive: true);
+    });
+    final valid = Directory('${dir.path}/valid')..createSync(recursive: true);
+    final file = File('${valid.path}/a.jpg')..writeAsStringSync('image');
+
+    final settings = AppSettings(configDir: dir.path);
+    addTearDown(settings.dispose);
+    await settings.load();
+    final store = Store(settings);
+    addTearDown(store.dispose);
+    final chat = Chat('stale', 'Stale');
+    chat.dirs.add(
+      MediaDir(
+        '${dir.path}/gone',
+        {'a.jpg': '${dir.path}/gone/a.jpg'},
+        {'photos/a.jpg': '${dir.path}/gone/a.jpg'},
+      ),
+    );
+    chat.dirs.add(
+      MediaDir(valid.path, {'a.jpg': file.path}, {'photos/a.jpg': file.path}),
+    );
+    store.chats[chat.key] = chat;
+
+    expect(store.findMedia('photos/a.jpg', chat), file.path);
+  });
 }
+
+String _twoThreadJson() => jsonEncode([
+  <String, dynamic>{
+    'threadId': 'alpha-id',
+    'threadName': 'Alpha',
+    'participants': [
+      <String, dynamic>{'name': 'Ana'},
+    ],
+    'messages': [
+      <String, dynamic>{
+        'sender_name': 'Ana',
+        'timestamp_ms': 1000,
+        'content': 'alpha one',
+      },
+    ],
+  },
+  <String, dynamic>{
+    'threadId': 'beta-id',
+    'threadName': 'Beta',
+    'participants': [
+      <String, dynamic>{'name': 'Ben'},
+    ],
+    'messages': [
+      <String, dynamic>{
+        'sender_name': 'Ben',
+        'timestamp_ms': 2000,
+        'content': 'beta one',
+      },
+    ],
+  },
+]);
 
 Msg _msg(
   String id,

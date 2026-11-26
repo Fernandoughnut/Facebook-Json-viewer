@@ -103,4 +103,28 @@ void main() {
       expect(scanned.containsKey('broken.jpg.tmp'), isFalse);
     },
   );
+
+  test(
+    'scanDirIndex preserves relative folders for duplicate file names',
+    () async {
+      final dir = await Directory.systemTemp.createTemp(
+        'indexed_scan_index_test_',
+      );
+      addTearDown(() {
+        if (dir.existsSync()) dir.deleteSync(recursive: true);
+      });
+      final photos = Directory('${dir.path}/photos')
+        ..createSync(recursive: true);
+      final videos = Directory('${dir.path}/videos')
+        ..createSync(recursive: true);
+      File('${photos.path}/a.jpg').writeAsStringSync('photo');
+      File('${videos.path}/a.jpg').writeAsStringSync('video');
+
+      final index = scanDirIndex(dir.path);
+      expect(index.files['a.jpg'], isNotNull);
+      expect(index.paths['photos/a.jpg'], endsWith('photos/a.jpg'));
+      expect(index.paths['videos/a.jpg'], endsWith('videos/a.jpg'));
+      expect(index.paths['photos/a.jpg'], isNot(index.paths['videos/a.jpg']));
+    },
+  );
 }

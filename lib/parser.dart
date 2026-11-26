@@ -339,8 +339,15 @@ Future<List<ParsedThread>> parseInBackground(
   ),
 );
 
-Future<Map<String, String>> scanInBackground(String dir) =>
-    Isolate.run(() => scanDir(dir));
+/// Both indexes are returned together so a folder scan can be streamed from
+/// the isolate once instead of walking the tree twice.
+typedef MediaDirIndex = ({
+  Map<String, String> files,
+  Map<String, String> paths,
+});
+
+Future<MediaDirIndex> scanInBackground(String dir) =>
+    Isolate.run(() => scanDirIndex(dir));
 
 /// Read and parse one JSON file. Runs off the UI thread.
 List<ParsedThread> parseFile(String path, {bool keepRaw = true}) {
@@ -554,27 +561,45 @@ List<ParsedThread> parseFileCached(
   return threads;
 }
 
-/// Walk a folder and map lowercase file name -> full path (JSON files are skipped).
-Map<String, String> scanDir(String dir) {
-  final out = <String, String>{};
+/// Backwards-compatible basename index. Prefer [scanDirIndex] when the caller
+/// can keep the relative-path index too.
+Map<String, String> scanDir(String dir) => scanDirIndex(dir).files;
+
+/// Walk a folder once and build two lowercase indexes: basename -> full path,
+/// and relative path -> full path. The second index is what stops
+/// `photos/a.jpg` and `videos/a.jpg` from collapsing into one media file.
+MediaDirIndex scanDirIndex(String dir) {
+  final files = <String, String>{};
+  final paths = <String, String>{};
+  final root = dir.replaceAll('\\', '/').replaceFirst(RegExp(r'/$'), '');
   try {
     for (final e in Directory(
       dir,
     ).listSync(recursive: true, followLinks: false)) {
-      if (e is File) {
-        final n = e.path.split(pathSep).last.toLowerCase();
-        // Interrupted SAF copies leave .part files behind; they are not media.
-        if (!n.endsWith('.json') &&
-            !n.endsWith('.part') &&
-            !n.endsWith('.tmp')) {
-          // Case-only collisions must not depend on directory iteration order.
-          final prev = out[n];
-          if (prev == null || e.path.compareTo(prev) < 0) out[n] = e.path;
-        }
+      if (e is! File) continue;
+      final name = e.path.split(pathSep).last.toLowerCase();
+      // Interrupted SAF copies leave .part files behind; they are not media.
+      if (name.endsWith('.json') ||
+          name.endsWith('.part') ||
+          name.endsWith('.tmp')) {
+        continue;
+      }
+      // Case-only collisions must not depend on directory iteration order.
+      final prev = files[name];
+      if (prev == null || e.path.compareTo(prev) < 0) files[name] = e.path;
+
+      final normalized = e.path.replaceAll('\\', '/');
+      final relative = normalized.startsWith('$root/')
+          ? normalized.substring(root.length + 1)
+          : name;
+      final key = relative.toLowerCase();
+      final prevPath = paths[key];
+      if (prevPath == null || e.path.compareTo(prevPath) < 0) {
+        paths[key] = e.path;
       }
     }
   } catch (_) {
-    // keep whatever was found before an unreadable sub-folder
+    // Keep whatever was found before an unreadable sub-folder.
   }
-  return out;
+  return (files: files, paths: paths);
 }

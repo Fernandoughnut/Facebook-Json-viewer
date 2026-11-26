@@ -88,7 +88,13 @@ class ParsedThread {
 class MediaDir {
   final String path;
   final Map<String, String> files; // lowercase file name -> full path
-  MediaDir(this.path, this.files);
+
+  /// Lowercase relative path (for example `photos/a.jpg`) -> full path. This
+  /// keeps two different files with the same file name distinguishable.
+  final Map<String, String> paths;
+
+  MediaDir(this.path, this.files, [Map<String, String>? paths])
+    : paths = paths ?? const <String, String>{};
 
   int get count => files.length;
 }

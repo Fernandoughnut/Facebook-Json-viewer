@@ -22,11 +22,14 @@ Planned next:
   persists across chats and launches.
 - Conversation-scoped **Pack media (ZIP)**: the chat menu and media info dialog
   now bundle only the files that conversation references. Files keep their
-  original bytes, get readable `date_sender_originalname` names, and ship with
-  `conversation.json` plus a manifest mapping the hashed export URIs to the
-  packed files. Duplicate references are packed once; missing references are
-  recorded in the manifest. Android saves through a native SAF stream, so even
-  large archives do not cross the method channel in memory.
+  original bytes and ship with `conversation.json` plus a manifest mapping the
+  hashed export URIs to the packed files. A confirmation dialog lets you choose
+  **original names in chronological order** (`media/<original path>`, best for
+  adding the extracted folder back to the conversation) or readable
+  `date_sender_originalname` names. Repeated references may be packed once or
+  as separate copies; missing references are recorded in the manifest. Android
+  saves through a native SAF stream, so even large archives do not cross the
+  method channel in memory.
 - Real Indexed launcher artwork: adaptive Android icons (including monochrome)
   and a bundled Linux window icon.
 
@@ -49,9 +52,19 @@ Planned next:
 - Inline photos and gallery tiles decode at the screen's real pixel density,
   and the full-screen viewer decodes the original image instead of a
   logical-pixel-width copy. Imported media itself remains byte-for-byte.
+- Media folders now index relative paths as well as file names, so
+  `photos/a.jpg` and `videos/a.jpg` stay distinct. A stale folder entry no
+  longer shadows a valid copy in a later folder.
 
 ### Fixed
 
+- Explicitly opening a JSON again revives a conversation that was removed from
+  the app. Startup restore still skips removed conversations, and re-picking a
+  file shared by several conversations no longer duplicates messages.
+- Large media packs no longer silently collapse distinct files that share a
+  file name, and the dialog now explains references versus unique files.
+  Files that vanish after a folder was indexed are listed instead of being
+  silently omitted.
 - Media ZIP names include milliseconds, so packing twice in the same second no
   longer overwrites the first archive.
 - Android export progress listeners are now shared safely; finishing one pack

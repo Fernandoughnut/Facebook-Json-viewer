@@ -621,7 +621,7 @@ class _HomeScreenState extends State<HomeScreen> {
       'Open JSON: ${paths.length} file(s), keepRaw=${widget.settings.keepRaw}',
     );
     await _offerLighterMemoryForLargeFiles(paths);
-    await store.addJsonFiles(paths);
+    await store.addJsonFiles(paths, reviveRemoved: true);
     if (mounted && selected == null && store.chats.length == 1) {
       setState(() => selected = store.chats.values.first);
     }
@@ -652,7 +652,7 @@ class _HomeScreenState extends State<HomeScreen> {
       'Import folder: ${files.length} file(s), keepRaw=${widget.settings.keepRaw}',
     );
     await _offerLighterMemoryForLargeFiles(files);
-    await store.addJsonFiles(files);
+    await store.addJsonFiles(files, reviveRemoved: true);
     if (mounted && selected == null && store.chats.length == 1) {
       setState(() => selected = store.chats.values.first);
     }
