@@ -1093,18 +1093,24 @@ class _HomeScreenState extends State<HomeScreen> {
             builder: (context, box) {
               final wide = box.maxWidth >= 800;
               _wide = wide;
+              // Let the navigator handle Back whenever we are at the chat
+              // list (including dialogs above it). Only intercept Back while
+              // a conversation is open, so it returns to the list instead.
+              final navigator = Navigator.of(context);
               return PopScope<Object?>(
-                canPop: false,
+                canPop: selected == null,
                 onPopInvokedWithResult: (didPop, result) {
                   if (didPop) return;
+                  if (navigator.canPop()) {
+                    navigator.pop();
+                    return;
+                  }
                   if (selected != null) {
                     setState(() {
                       selected = null;
                       _jumpTarget = null;
                     });
-                    return;
                   }
-                  SystemNavigator.pop();
                 },
                 child: Scaffold(
                   appBar: wide ? null : AppBar(title: const Text('Indexed')),

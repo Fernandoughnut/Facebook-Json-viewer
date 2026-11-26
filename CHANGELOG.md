@@ -14,8 +14,8 @@ Planned next:
 
 ### Changed
 
-- Android system Back now returns from an open conversation to the chat list
-  instead of exiting the app.
+- Android system Back now returns from an open conversation to the chat list,
+  leaves dialogs intact, and exits cleanly from the chat list.
 - Parse cache files are written incrementally, avoiding a second full copy of
   every message in memory on large exports.
 - The long-lived import dedupe index stores compact hashes instead of full
