@@ -6,6 +6,14 @@ The format is based on Keep a Changelog, and versions follow Semantic Versioning
 
 ## [Unreleased]
 
+Planned next:
+
+- Device validation on the Android 17 AOSP phone and Android 14 tablet.
+- Edge-to-edge, back-gesture and touch-layout checks.
+- Replace the placeholder launcher icon with the new Indexed artwork.
+
+## [1.3.0] - 2026-11-26
+
 ### Added
 
 - Repeatable Android sideload build script (`tool/build_android.sh`) producing
@@ -56,12 +64,6 @@ The format is based on Keep a Changelog, and versions follow Semantic Versioning
 - Long-pressing a message on Android now opens Message details, matching
   right-click on Linux. Hidden-by-grouping timestamps no longer leave stray
   info icons under earlier messages.
-
-Planned next:
-
-- Device validation on the Android 17 AOSP phone and Android 14 tablet.
-- Edge-to-edge, back-gesture and touch-layout checks.
-- Replace the placeholder launcher icon with the new Indexed artwork.
 
 ## [1.2.0] - 2026-11-26
 

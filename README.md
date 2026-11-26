@@ -115,7 +115,7 @@ To build and package that bundle locally:
 
 ```bash
 ./tool/package_linux.sh                         # indexed-linux-x64.tar.gz
-./tool/package_linux.sh Indexed-linux-x64-v1.2.0.tar.gz
+./tool/package_linux.sh Indexed-linux-x64-v1.3.0.tar.gz
 ```
 
 The script builds the release bundle, archives its *contents* with the required trailing `.`, and writes a `.sha256` file beside the archive.
@@ -134,9 +134,9 @@ To build sideload APKs:
 ./tool/build_android.sh /tmp/opencode/indexed-android
 ```
 
-The script produces a universal APK plus split APKs for `arm64-v8a`, `armeabi-v7a` and `x86_64`, each with a `.sha256` file. Artifacts default to `build/android/release/` and are named from the `pubspec.yaml` version, for example `Indexed-universal-1.2.0.apk`. It requires a configured Android SDK; `flutter doctor` should show the Android toolchain as available first.
+The script produces a universal APK plus split APKs for `arm64-v8a`, `armeabi-v7a` and `x86_64`, each with a `.sha256` file. Artifacts default to `build/android/release/` and are named from the `pubspec.yaml` version, for example `Indexed-universal-1.3.0.apk`. It requires a configured Android SDK; `flutter doctor` should show the Android toolchain as available first.
 
-Pushing a version tag such as `v1.2.0` triggers `.github/workflows/release.yml`: GitHub checks that the tag matches `pubspec.yaml`, runs the checks, builds the Linux release bundle, packages it as `Indexed-linux-x64-v1.2.0.tar.gz`, and attaches it to a new GitHub Release with a SHA-256 checksum.
+Pushing a version tag such as `v1.3.0` triggers `.github/workflows/release.yml`: GitHub checks that the tag matches `pubspec.yaml`, runs the checks, builds the Linux release bundle, packages it as `Indexed-linux-x64-v1.3.0.tar.gz`, and attaches it to a new GitHub Release with a SHA-256 checksum.
 
 To measure parsing on a synthetic 100k-message export:
 
