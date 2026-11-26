@@ -8,9 +8,13 @@ The format is based on Keep a Changelog, and versions follow Semantic Versioning
 
 Planned next:
 
-- Device validation on the Android 17 AOSP phone and Android 14 tablet.
+- Device validation on the Android 17 AOSP phone.
 - Edge-to-edge, back-gesture and touch-layout checks.
-- Replace the placeholder launcher icon with the new Indexed artwork.
+
+### Added
+
+- Real Indexed launcher artwork: adaptive Android icons (including monochrome)
+  and a bundled Linux window icon.
 
 ### Changed
 

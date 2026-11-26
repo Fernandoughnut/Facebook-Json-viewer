@@ -24,3 +24,11 @@ target_link_libraries(${BINARY_NAME} PRIVATE flutter)
 target_link_libraries(${BINARY_NAME} PRIVATE PkgConfig::GTK)
 
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
+
+# Ship the launcher icon inside the relocatable bundle. my_application.cc also
+# loads this copy directly so the running window has an icon without a desktop
+# installation.
+install(FILES "resources/app_icon.png"
+  DESTINATION "share/icons/hicolor/512x512/apps"
+  RENAME "indexed.png"
+  COMPONENT Runtime)

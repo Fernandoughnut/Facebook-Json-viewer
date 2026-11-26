@@ -1,5 +1,8 @@
 #include "my_application.h"
 
+#include <limits.h>
+#include <unistd.h>
+
 #include <flutter_linux/flutter_linux.h>
 
 #include "flutter/generated_plugin_registrant.h"
@@ -36,6 +39,21 @@ static void my_application_activate(GApplication* application) {
   // gtk_window_set_titlebar(window, GTK_WIDGET(header_bar));
 
   gtk_window_set_title(window, "Indexed");
+
+  // Use the icon shipped in the relocatable bundle next to the executable.
+  char exe_path[PATH_MAX];
+  const ssize_t len = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
+  if (len > 0) {
+    exe_path[len] = '\0';
+    g_autofree gchar* dir = g_path_get_dirname(exe_path);
+    g_autofree gchar* icon = g_build_filename(
+        dir, "share", "icons", "hicolor", "512x512", "apps", "indexed.png",
+        nullptr);
+    if (g_file_test(icon, G_FILE_TEST_EXISTS)) {
+      g_autoptr(GError) icon_error = nullptr;
+      gtk_window_set_icon_from_file(window, icon, &icon_error);
+    }
+  }
 
   g_autoptr(FlDartProject) project = fl_dart_project_new();
   fl_dart_project_set_dart_entrypoint_arguments(
