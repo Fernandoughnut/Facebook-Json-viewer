@@ -385,12 +385,14 @@ class _ChatViewState extends State<ChatView> {
   /// Whether the search/filter header is collapsed into its slim strip.
   final ValueNotifier<bool> _topBarHidden = ValueNotifier(false);
 
-  /// Immersive mode keeps the overlay position bar hidden until a fast flick.
+  /// Immersive mode keeps the overlay position bar hidden until a sustained
+  /// fast scroll, and detaches the search controls from the layout entirely.
   final ValueNotifier<bool> _immersiveBarVisible = ValueNotifier(false);
-  bool _immersiveHeaderExpanded = false;
+  final ValueNotifier<bool> _immersiveControlsVisible = ValueNotifier(true);
+  bool _immersiveSearchExpanded = false;
   Timer? _immersiveBarTimer;
-  static const _fastScrollWindow = Duration(milliseconds: 200);
-  final List<({int t, double px})> _scrollSamples = [];
+  Timer? _immersiveControlsTimer;
+  final FastScrollTracker _fastScroll = FastScrollTracker();
 
   double? _lastScrollPixels;
   int _ignoreScrollUntil = 0;
@@ -475,7 +477,9 @@ class _ChatViewState extends State<ChatView> {
     _hlTimer?.cancel();
     _searchTimer?.cancel();
     _immersiveBarTimer?.cancel();
+    _immersiveControlsTimer?.cancel();
     _immersiveBarVisible.dispose();
+    _immersiveControlsVisible.dispose();
     qc.dispose();
     searchFocus.dispose();
     _resultsController.dispose();
@@ -751,7 +755,7 @@ class _ChatViewState extends State<ChatView> {
 
   // ---------- header that follows the scroll ----------
 
-  /// Briefly reveal the overlay position bar for a fast flick.
+  /// Briefly reveal the overlay position bar after a sustained fast scroll.
   void _flashImmersiveBar() {
     if (!settings.immersiveMode) return;
     _immersiveBarVisible.value = true;
@@ -761,42 +765,88 @@ class _ChatViewState extends State<ChatView> {
     });
   }
 
-  /// Compare against a short window instead of just the previous frame. Fling
-  /// notifications can be sparse, and a single huge jump must not be missed.
+  /// The bar appears only after fast scrolling has lasted a while, so quick
+  /// flicks no longer flash it.
   void _trackFastScroll(int now, double pixels) {
     if (!settings.immersiveMode) {
-      _scrollSamples.clear();
+      _fastScroll.reset();
       return;
     }
-    _scrollSamples.add((t: now, px: pixels));
-    while (_scrollSamples.length > 1 &&
-        now - _scrollSamples.first.t > _fastScrollWindow.inMilliseconds) {
-      _scrollSamples.removeAt(0);
+    if (_fastScroll.update(now, pixels)) _flashImmersiveBar();
+  }
+
+  /// Keep the floating controls on screen while the reader is actively using
+  /// them, otherwise hide them after [delay].
+  void _scheduleImmersiveControlsHide([
+    Duration delay = const Duration(seconds: 3),
+  ]) {
+    _immersiveControlsTimer?.cancel();
+    _immersiveControlsTimer = Timer(delay, () {
+      if (!mounted || !settings.immersiveMode) return;
+      if (query.isNotEmpty || searchFocus.hasFocus || selecting) {
+        _scheduleImmersiveControlsHide();
+        return;
+      }
+      _hideImmersiveControls();
+    });
+  }
+
+  void revealImmersiveControls() {
+    if (!settings.immersiveMode) return;
+    _immersiveControlsVisible.value = true;
+    _scheduleImmersiveControlsHide();
+  }
+
+  /// Brings search into view from a shortcut or menu action. In immersive mode
+  /// the field is not built until the floating controls are revealed.
+  void focusSearch() {
+    if (settings.immersiveMode) {
+      setState(() {
+        _immersiveControlsVisible.value = true;
+        _immersiveSearchExpanded = true;
+      });
+      _scheduleImmersiveControlsHide();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) searchFocus.requestFocus();
+      });
+      return;
     }
-    final first = _scrollSamples.first;
-    final elapsed = now - first.t;
-    if (_scrollSamples.length > 1 &&
-        elapsed > 0 &&
-        isFastScroll(pixels - first.px, elapsed)) {
-      _flashImmersiveBar();
-    }
+    _topBarHidden.value = false;
+    searchFocus.requestFocus();
+  }
+
+  void _hideImmersiveControls() {
+    _immersiveControlsTimer?.cancel();
+    // This is an explicit hide, so it must work even while the search field is
+    // focused. Auto-hide paths already guard against active input.
+    searchFocus.unfocus();
+    _immersiveControlsVisible.value = false;
+    _immersiveSearchExpanded = false;
+  }
+
+  Widget _hideImmersiveControlsButton() {
+    return IconButton(
+      tooltip: 'Hide immersive controls',
+      visualDensity: VisualDensity.compact,
+      constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+      padding: EdgeInsets.zero,
+      icon: const Icon(Icons.expand_less, size: 18),
+      onPressed: _hideImmersiveControls,
+    );
   }
 
   void toggleImmersive() {
     settings.update(() => settings.immersiveMode = !settings.immersiveMode);
-    _immersiveHeaderExpanded = false;
-    _scrollSamples.clear();
+    _immersiveSearchExpanded = false;
+    _fastScroll.reset();
     _immersiveBarTimer?.cancel();
     _immersiveBarVisible.value = false;
-    if (settings.immersiveMode && mounted) {
-      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Immersive mode: scroll fast to reveal the position bar',
-          ),
-          duration: Duration(seconds: 2),
-        ),
-      );
+    _immersiveControlsTimer?.cancel();
+    if (settings.immersiveMode) {
+      _immersiveControlsVisible.value = true;
+      _scheduleImmersiveControlsHide(const Duration(seconds: 2));
+    } else {
+      _immersiveControlsVisible.value = false;
     }
   }
 
@@ -809,29 +859,27 @@ class _ChatViewState extends State<ChatView> {
 
     if (n is ScrollUpdateNotification) {
       _trackFastScroll(now, pixels);
+      if (settings.immersiveMode &&
+          _immersiveControlsVisible.value &&
+          query.isEmpty &&
+          !searchFocus.hasFocus &&
+          !selecting) {
+        _hideImmersiveControls();
+      }
     } else {
-      _scrollSamples.clear();
+      _fastScroll.reset();
     }
 
-    final prev = _lastScrollPixels;
-    _lastScrollPixels = pixels;
-
-    // Immersive's temporarily expanded header collapses on any real scroll,
-    // even when the general auto-hide preference is off.
-    if (settings.immersiveMode &&
-        _immersiveHeaderExpanded &&
-        query.isEmpty &&
-        !searchFocus.hasFocus &&
-        !selecting &&
-        prev != null &&
-        (pixels - prev).abs() > 2) {
-      setState(() => _immersiveHeaderExpanded = false);
-    }
+    // Immersive detaches the header completely, so the auto-hide bookkeeping
+    // is unnecessary while it is active.
+    if (settings.immersiveMode) return false;
 
     if (!settings.autoHideTopBar) return false;
     // The query and selection controls live in the header. Never collapse it
     // while the reader is using them.
     if (query.isNotEmpty || searchFocus.hasFocus || selecting) return false;
+    final prev = _lastScrollPixels;
+    _lastScrollPixels = pixels;
     if (now < _ignoreScrollUntil || prev == null) return false;
     final delta = pixels - prev;
     if (pixels <= 96) {
@@ -848,17 +896,6 @@ class _ChatViewState extends State<ChatView> {
     _ignoreScrollUntil = now + 250;
     _lastScrollPixels = null;
     return false;
-  }
-
-  Widget _collapseImmersiveHeaderButton() {
-    return IconButton(
-      tooltip: 'Compact header',
-      visualDensity: VisualDensity.compact,
-      constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-      padding: EdgeInsets.zero,
-      icon: const Icon(Icons.expand_less, size: 18),
-      onPressed: () => setState(() => _immersiveHeaderExpanded = false),
-    );
   }
 
   /// Slim replacement for the search/filter header. The people-filter eye
@@ -881,17 +918,7 @@ class _ChatViewState extends State<ChatView> {
               borderRadius: BorderRadius.circular(20),
               child: InkWell(
                 borderRadius: BorderRadius.circular(20),
-                onTap: () {
-                  if (settings.immersiveMode) {
-                    setState(() => _immersiveHeaderExpanded = true);
-                    WidgetsBinding.instance.addPostFrameCallback((_) {
-                      if (mounted) searchFocus.requestFocus();
-                    });
-                  } else {
-                    _topBarHidden.value = false;
-                    searchFocus.requestFocus();
-                  }
-                },
+                onTap: focusSearch,
                 child: SizedBox(
                   height: 38,
                   child: Padding(
@@ -922,28 +949,13 @@ class _ChatViewState extends State<ChatView> {
           ),
           const SizedBox(width: 2),
           _peopleFilterToggle(),
-          if (settings.immersiveMode)
-            IconButton(
-              tooltip: 'Exit immersive mode',
-              visualDensity: VisualDensity.compact,
-              constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-              padding: EdgeInsets.zero,
-              icon: const Icon(Icons.fullscreen_exit, size: 18),
-              onPressed: toggleImmersive,
-            ),
           IconButton(
             tooltip: 'Show search and filters',
             visualDensity: VisualDensity.compact,
             constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
             padding: EdgeInsets.zero,
             icon: const Icon(Icons.expand_more, size: 18),
-            onPressed: () {
-              if (settings.immersiveMode) {
-                setState(() => _immersiveHeaderExpanded = true);
-              } else {
-                _topBarHidden.value = false;
-              }
-            },
+            onPressed: () => _topBarHidden.value = false,
           ),
         ],
       ),
@@ -978,6 +990,243 @@ class _ChatViewState extends State<ChatView> {
           ),
         );
       },
+    );
+  }
+
+  /// Translucent surface used by the floating immersive controls.
+  Widget _immersiveSurface({required Widget child, double radius = 24}) {
+    final cs = Theme.of(context).colorScheme;
+    final m3 = Theme.of(context).useMaterial3;
+    return Container(
+      decoration: BoxDecoration(
+        color: (m3 ? cs.surfaceContainerHigh : cs.surface).withValues(
+          alpha: 0.94,
+        ),
+        borderRadius: BorderRadius.circular(radius),
+        border: Border.all(color: cs.outlineVariant.withValues(alpha: 0.45)),
+        boxShadow: [
+          BoxShadow(
+            color: cs.shadow.withValues(alpha: 0.18),
+            blurRadius: 14,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Material(color: Colors.transparent, child: child),
+    );
+  }
+
+  Widget _immersiveMiniIcon({
+    required IconData icon,
+    required String tooltip,
+    required VoidCallback onTap,
+  }) {
+    final cs = Theme.of(context).colorScheme;
+    return Tooltip(
+      message: tooltip,
+      child: _immersiveSurface(
+        radius: 999,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(999),
+          onTap: onTap,
+          child: SizedBox(
+            width: 40,
+            height: 40,
+            child: Icon(icon, size: 18, color: cs.onSurfaceVariant),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Immersive controls float above the conversation instead of reserving
+  /// header space. They fade away while reading and return via the small
+  /// immersive button at the top-left.
+  Widget _immersiveOverlay({
+    required Widget panelToggle,
+    required Widget overflowMenu,
+    required SearchPreset? activePreset,
+    required bool panelVisible,
+  }) {
+    return Positioned.fill(
+      child: ValueListenableBuilder<bool>(
+        valueListenable: _immersiveControlsVisible,
+        builder: (context, visible, _) {
+          final child = visible
+              ? KeyedSubtree(
+                  key: const ValueKey('immersive-controls'),
+                  child: LayoutBuilder(
+                    builder: (context, box) {
+                      final expanded = _immersiveSearchExpanded;
+                      final available = math.max(0.0, box.maxWidth - 24);
+                      final width = expanded
+                          ? math.min(560.0, available)
+                          : math.min(460.0, available);
+                      return Align(
+                        alignment: Alignment.topCenter,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 8,
+                          ),
+                          child: SizedBox(
+                            width: width,
+                            child: ConstrainedBox(
+                              constraints: BoxConstraints(
+                                maxHeight: expanded ? 360 : double.infinity,
+                              ),
+                              child: _immersiveSurface(
+                                radius: expanded ? 20 : 24,
+                                child: expanded
+                                    ? SingleChildScrollView(
+                                        child: Column(
+                                          mainAxisSize: MainAxisSize.min,
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.stretch,
+                                          children: [
+                                            Padding(
+                                              padding:
+                                                  const EdgeInsets.fromLTRB(
+                                                    14,
+                                                    8,
+                                                    6,
+                                                    0,
+                                                  ),
+                                              child: Row(
+                                                children: [
+                                                  Text(
+                                                    'Search and filters',
+                                                    style: Theme.of(context)
+                                                        .textTheme
+                                                        .labelLarge,
+                                                  ),
+                                                  const Spacer(),
+                                                  _hideImmersiveControlsButton(),
+                                                ],
+                                              ),
+                                            ),
+                                            Padding(
+                                              padding:
+                                                  const EdgeInsets.fromLTRB(
+                                                    8,
+                                                    4,
+                                                    8,
+                                                    0,
+                                                  ),
+                                              child: _searchToolbar(
+                                                panelToggle,
+                                                overflowMenu,
+                                              ),
+                                            ),
+                                            Padding(
+                                              padding:
+                                                  const EdgeInsets.fromLTRB(
+                                                    8,
+                                                    0,
+                                                    8,
+                                                    8,
+                                                  ),
+                                              child: _filterFooter(
+                                                activePreset,
+                                                panelVisible,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      )
+                                    : Row(
+                                        children: [
+                                          Expanded(
+                                            child: InkWell(
+                                              borderRadius:
+                                                  BorderRadius.circular(24),
+                                              onTap: focusSearch,
+                                              child: Padding(
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                      horizontal: 14,
+                                                      vertical: 8,
+                                                    ),
+                                                child: Row(
+                                                  children: [
+                                                    const Icon(
+                                                      Icons.search,
+                                                      size: 18,
+                                                    ),
+                                                    const SizedBox(width: 8),
+                                                    Expanded(
+                                                      child: Text(
+                                                        query.isEmpty
+                                                            ? 'Search messages'
+                                                            : query,
+                                                        overflow: TextOverflow
+                                                            .ellipsis,
+                                                      ),
+                                                    ),
+                                                    if (hasActiveFilters) ...[
+                                                      const SizedBox(width: 8),
+                                                      Icon(
+                                                        Icons.filter_list,
+                                                        size: 16,
+                                                        color: Theme.of(context)
+                                                            .colorScheme
+                                                            .primary,
+                                                      ),
+                                                    ],
+                                                  ],
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                          _peopleFilterToggle(),
+                                          panelToggle,
+                                          overflowMenu,
+                                          _hideImmersiveControlsButton(),
+                                        ],
+                                      ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                )
+              : KeyedSubtree(
+                  key: const ValueKey('immersive-mini'),
+                  child: Align(
+                    alignment: Alignment.topLeft,
+                    child: Padding(
+                      padding: const EdgeInsets.only(top: 8, left: 12),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          _immersiveMiniIcon(
+                            icon: Icons.fullscreen,
+                            tooltip: 'Show immersive controls',
+                            onTap: revealImmersiveControls,
+                          ),
+                          const SizedBox(width: 6),
+                          _immersiveMiniIcon(
+                            icon: Icons.visibility_outlined,
+                            tooltip: 'People filters',
+                            onTap: openPeopleFilters,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+          return AnimatedSwitcher(
+            duration: const Duration(milliseconds: 160),
+            switchInCurve: Curves.easeOut,
+            switchOutCurve: Curves.easeIn,
+            transitionBuilder: (widget, animation) =>
+                FadeTransition(opacity: animation, child: widget),
+            child: child,
+          );
+        },
+      ),
     );
   }
 
@@ -1271,7 +1520,7 @@ class _ChatViewState extends State<ChatView> {
     if (value is! _ChatMenuAction) return;
     switch (value) {
       case _ChatMenuAction.focusSearch:
-        searchFocus.requestFocus();
+        focusSearch();
       case _ChatMenuAction.panel:
         setState(() {
           panelMode = !panelMode;
@@ -2663,6 +2912,10 @@ class _ChatViewState extends State<ChatView> {
         final panelVisible = panelMode && query.isNotEmpty;
         final panelSide = panelVisible && _wide;
         final panelFull = panelVisible && !_wide && resultsOpen;
+        // Gallery and the full results panel have their own controls, so only
+        // the normal conversation view detaches its header into a float.
+        final immersiveOverlay =
+            immersive && !gallery && !panelFull && view.isNotEmpty;
         final showPositionBar =
             !gallery &&
             !panelFull &&
@@ -2674,8 +2927,8 @@ class _ChatViewState extends State<ChatView> {
 
         return CallbackShortcuts(
           bindings: {
-            const SingleActivator(LogicalKeyboardKey.keyF, control: true): () =>
-                searchFocus.requestFocus(),
+            const SingleActivator(LogicalKeyboardKey.keyF, control: true):
+                focusSearch,
             const SingleActivator(LogicalKeyboardKey.f3): () => stepMatch(1),
             const SingleActivator(LogicalKeyboardKey.f3, shift: true): () =>
                 stepMatch(-1),
@@ -2686,57 +2939,52 @@ class _ChatViewState extends State<ChatView> {
             autofocus: true,
             child: Column(
               children: [
-                ValueListenableBuilder<bool>(
-                  valueListenable: _topBarHidden,
-                  builder: (context, hidden, _) {
-                    // Immersive mode is compact by default, but the expand
-                    // button can reveal the full controls temporarily.
-                    final compact = immersive && !_immersiveHeaderExpanded;
-                    final full = compact
-                        ? false
-                        : immersive || !settings.autoHideTopBar || !hidden;
-                    return AnimatedSize(
-                      duration: const Duration(milliseconds: 180),
-                      curve: Curves.easeOut,
-                      alignment: Alignment.topCenter,
-                      child: full
-                          ? Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Padding(
-                                  padding: const EdgeInsets.fromLTRB(
-                                    8,
-                                    8,
-                                    8,
-                                    0,
+                // Immersive mode removes the header from the layout entirely;
+                // its controls are a floating overlay inside the chat area.
+                if (!immersiveOverlay)
+                  ValueListenableBuilder<bool>(
+                    valueListenable: _topBarHidden,
+                    builder: (context, hidden, _) {
+                      final full = !settings.autoHideTopBar || !hidden;
+                      return AnimatedSize(
+                        duration: const Duration(milliseconds: 180),
+                        curve: Curves.easeOut,
+                        alignment: Alignment.topCenter,
+                        child: full
+                            ? Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Padding(
+                                    padding: const EdgeInsets.fromLTRB(
+                                      8,
+                                      8,
+                                      8,
+                                      0,
+                                    ),
+                                    child: _searchToolbar(
+                                      panelToggle,
+                                      overflowMenu,
+                                    ),
                                   ),
-                                  child: _searchToolbar(
-                                    panelToggle,
-                                    overflowMenu,
-                                    extraTrailing: immersive
-                                        ? [_collapseImmersiveHeaderButton()]
-                                        : const [],
+                                  Padding(
+                                    padding: const EdgeInsets.fromLTRB(
+                                      8,
+                                      0,
+                                      8,
+                                      8,
+                                    ),
+                                    child: _filterFooter(
+                                      activePreset,
+                                      panelVisible,
+                                    ),
                                   ),
-                                ),
-                                Padding(
-                                  padding: const EdgeInsets.fromLTRB(
-                                    8,
-                                    0,
-                                    8,
-                                    8,
-                                  ),
-                                  child: _filterFooter(
-                                    activePreset,
-                                    panelVisible,
-                                  ),
-                                ),
-                                const Divider(height: 1),
-                              ],
-                            )
-                          : _compactTopBar(),
-                    );
-                  },
-                ),
+                                  const Divider(height: 1),
+                                ],
+                              )
+                            : _compactTopBar(),
+                      );
+                    },
+                  ),
                 Expanded(
                   child: NotificationListener<ScrollNotification>(
                     onNotification: _onScrollNotification,
@@ -2778,6 +3026,13 @@ class _ChatViewState extends State<ChatView> {
                             ],
                           ],
                         ),
+                        if (immersiveOverlay)
+                          _immersiveOverlay(
+                            panelToggle: panelToggle,
+                            overflowMenu: overflowMenu,
+                            activePreset: activePreset,
+                            panelVisible: panelVisible,
+                          ),
                         if (showPositionBar)
                           Positioned(
                             right: panelSide ? 373 : 12,

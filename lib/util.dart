@@ -103,9 +103,69 @@ bool sameMinute(int? a, int? b) {
 /// Immersive mode reveals its overlay position bar only for fast scrolls.
 const double kFastScrollPxPerSecond = 900;
 
+/// Scroll notifications can be sparse during a fling, so velocity is measured
+/// over a short window rather than between adjacent frames.
+const Duration kFastScrollWindow = Duration(milliseconds: 200);
+
+/// The position bar should not flash for a quick flick: the fast scrolling has
+/// to last this long before it is revealed.
+const Duration kFastScrollHold = Duration(milliseconds: 400);
+
 bool isFastScroll(double deltaPx, int elapsedMs) {
   if (elapsedMs <= 0) return false;
   return (deltaPx.abs() * 1000) / elapsedMs >= kFastScrollPxPerSecond;
+}
+
+/// Tracks scroll velocity without depending on Flutter widgets, so the
+/// immersive reveal rule can be tested directly.
+class FastScrollTracker {
+  FastScrollTracker({
+    this.window = kFastScrollWindow,
+    this.hold = kFastScrollHold,
+  });
+
+  final Duration window;
+  final Duration hold;
+
+  final List<({int t, double px})> _samples = <({int t, double px})>[];
+  int? _fastSince;
+  bool _revealed = false;
+
+  /// Records one scroll update. Returns true only once per sustained fast
+  /// burst, when [hold] has elapsed and the bar should be revealed.
+  bool update(int now, double pixels) {
+    _samples.add((t: now, px: pixels));
+    while (_samples.length > 1 &&
+        now - _samples.first.t > window.inMilliseconds) {
+      _samples.removeAt(0);
+    }
+
+    final first = _samples.first;
+    final elapsed = now - first.t;
+    final fast =
+        _samples.length > 1 &&
+        elapsed > 0 &&
+        isFastScroll(pixels - first.px, elapsed);
+    if (!fast) {
+      _fastSince = null;
+      _revealed = false;
+      return false;
+    }
+
+    _fastSince ??= now;
+    if (!_revealed && now - _fastSince! >= hold.inMilliseconds) {
+      _revealed = true;
+      return true;
+    }
+    return false;
+  }
+
+  /// Clears the burst state, e.g. when scrolling ends or immersive mode exits.
+  void reset() {
+    _samples.clear();
+    _fastSince = null;
+    _revealed = false;
+  }
 }
 
 /// Name shown in the UI: the alias if one was set, otherwise the export's name.

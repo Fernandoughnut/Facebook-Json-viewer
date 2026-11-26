@@ -13,10 +13,13 @@ Planned next:
 
 ### Added
 
-- Immersive conversation mode: a compact search pill with the people-filter eye
-  always available, no activity rail, and an overlay position bar that appears
-  only during fast scrolling. Toggle it from the chat menu, the compact header,
-  or Settings; the choice persists across chats and launches.
+- Immersive conversation mode: the search bar and its filter controls detach
+  from the layout and float above the conversation as a translucent pill. The
+  pill fades while reading and returns from a small immersive button at the
+  top-left; the people-filter eye stays available even while it is hidden. No
+  activity rail is shown, and the overlay position bar appears only after a
+  sustained fast scroll. Toggle it from the chat menu or Settings; the choice
+  persists across chats and launches.
 - Real Indexed launcher artwork: adaptive Android icons (including monochrome)
   and a bundled Linux window icon.
 
@@ -40,10 +43,12 @@ Planned next:
 - Overlapping imports still dedupe correctly after the compact index change.
 - Only the position bar's pill itself is hit-testable now. Touching the empty
   track no longer jumps immediately or steals Android gesture Back swipes.
-- Immersive mode's overlay bar now appears reliably on fast flings, even when
-  Flutter coalesces scroll notifications.
-- A temporarily expanded immersive header collapses on scroll regardless of the
-  general auto-hide setting, and Settings search now finds Immersive mode.
+- Immersive mode's overlay bar now appears reliably on sustained fast flings,
+  even when Flutter coalesces scroll notifications, without flashing on a quick
+  flick.
+- The floating immersive pill no longer reserves header space, so entering or
+  leaving immersive mode never resizes the conversation.
+- Settings search now finds Immersive mode.
 
 ## [1.3.0] - 2026-11-26
 

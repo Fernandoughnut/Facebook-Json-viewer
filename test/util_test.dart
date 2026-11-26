@@ -106,6 +106,40 @@ void main() {
     expect(isFastScroll(20, 100), isFalse);
     expect(isFastScroll(300, 0), isFalse);
   });
+
+  test('immersive position bar waits for sustained fast scrolling', () {
+    final tracker = FastScrollTracker();
+    var revealed = 0;
+    for (var i = 0; i <= 3; i++) {
+      if (tracker.update(i * 100, i * 300.0)) revealed++;
+    }
+    expect(revealed, 0);
+    expect(tracker.update(400, 1200), isFalse);
+    expect(tracker.update(500, 1500), isTrue);
+    expect(tracker.update(600, 1800), isFalse);
+  });
+
+  test('slow scrolling never reveals the immersive position bar', () {
+    final tracker = FastScrollTracker();
+    var revealed = false;
+    for (var i = 0; i <= 10; i++) {
+      revealed = tracker.update(i * 100, i * 20.0) || revealed;
+    }
+    expect(revealed, isFalse);
+  });
+
+  test('resetting the immersive tracker requires a new sustained burst', () {
+    final tracker = FastScrollTracker();
+    for (var i = 0; i <= 5; i++) {
+      tracker.update(i * 100, i * 300.0);
+    }
+    tracker.reset();
+    var afterReset = 0;
+    for (var i = 0; i <= 5; i++) {
+      if (tracker.update(1000 + i * 100, 1500 + i * 300.0)) afterReset++;
+    }
+    expect(afterReset, 1);
+  });
 }
 
 class _At {

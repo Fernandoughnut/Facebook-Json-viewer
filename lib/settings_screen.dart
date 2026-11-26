@@ -650,7 +650,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         contentPadding: EdgeInsets.zero,
         title: const Text('Start conversations in immersive mode'),
         subtitle: const Text(
-          'Compact search pill, no activity rail, and an overlay position bar that appears only during fast scrolling. Toggle it any time from the chat menu or the compact header.',
+          'Search and filters float over the conversation as a pill that fades while you read. No activity rail, and the position bar appears only after sustained fast scrolling. Toggle any time from the chat menu.',
         ),
         value: settings.immersiveMode,
         onChanged: (v) => settings.update(() => settings.immersiveMode = v),
@@ -668,7 +668,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         contentPadding: EdgeInsets.zero,
         title: const Text('Show position bar in chats'),
         subtitle: const Text(
-          'A short rounded pill inset from the right edge. Only touching the pill itself jumps; empty space and gesture Back pass through. In immersive mode it fades in only when you scroll fast.',
+          'A short rounded pill inset from the right edge. Only touching the pill itself jumps; empty space and gesture Back pass through. In immersive mode it fades in only after sustained fast scrolling.',
         ),
         value: settings.showIndexScrollbar,
         onChanged: (v) =>
