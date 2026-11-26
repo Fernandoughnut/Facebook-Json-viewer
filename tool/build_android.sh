@@ -29,17 +29,22 @@ if [ ! -f "$APK_DIR/app-release.apk" ]; then
 fi
 cp "$APK_DIR/app-release.apk" "$OUT/Indexed-universal-$VERSION.apk"
 
-# Smaller per-device APKs for sideloading.
+# Smaller per-device APKs for sideloading. All three are promised in releases,
+# so a missing ABI is a build failure instead of a silently incomplete upload.
 flutter build apk --release --split-per-abi
 for abi in arm64-v8a armeabi-v7a x86_64; do
   SRC="$APK_DIR/app-$abi-release.apk"
-  if [ -f "$SRC" ]; then
-    cp "$SRC" "$OUT/Indexed-$abi-$VERSION.apk"
+  if [ ! -f "$SRC" ]; then
+    echo "Expected $SRC was not produced" >&2
+    exit 1
   fi
+  cp "$SRC" "$OUT/Indexed-$abi-$VERSION.apk"
 done
 
-for f in "$OUT"/*.apk; do
+# Checksums use bare file names so they can be verified after download.
+cd "$OUT"
+for f in *.apk; do
   sha256sum "$f" > "$f.sha256"
-  echo "$f"
-  echo "$f.sha256"
+  echo "$PWD/$f"
+  echo "$PWD/$f.sha256"
 done

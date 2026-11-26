@@ -248,55 +248,52 @@ class _IndexScrollbarState extends State<_IndexScrollbar> {
                   ? 0.0
                   : (position / maxTop).clamp(0.0, 1.0);
               final thumbTop = progress * math.max(0.0, height - thumbHeight);
-              // No full-height track and no divider: only the pill is
-              // hit-testable. Touches in the empty space above/below it (and
-              // the 12 dp edge inset added by the parent) pass straight through
-              // to gesture navigation.
-              return Padding(
-                padding: const EdgeInsets.symmetric(vertical: 6),
-                child: SizedBox(
-                  key: _trackKey,
-                  width: 18,
-                  child: Stack(
-                    children: [
-                      Positioned(
-                        top: thumbTop,
-                        height: thumbHeight,
-                        left: 0,
-                        right: 0,
-                        child: GestureDetector(
-                          behavior: HitTestBehavior.opaque,
-                          onTapUp: (d) {
-                            final dy = _trackDy(d.globalPosition);
-                            if (dy == null) return;
-                            _drag(dy, height, thumbHeight);
-                            _endDrag();
-                          },
-                          onVerticalDragStart: (d) {
-                            final dy = _trackDy(d.globalPosition);
-                            if (dy != null) _drag(dy, height, thumbHeight);
-                          },
-                          onVerticalDragUpdate: (d) {
-                            final dy = _trackDy(d.globalPosition);
-                            if (dy != null) _drag(dy, height, thumbHeight);
-                          },
-                          onVerticalDragEnd: (_) => _endDrag(),
-                          onVerticalDragCancel: _endDrag,
-                          child: AnimatedContainer(
-                            duration: const Duration(milliseconds: 120),
-                            width: widget.immersive ? 7 : 6,
-                            height: thumbHeight,
-                            decoration: BoxDecoration(
-                              color: cs.onSurface.withValues(
-                                alpha: widget.immersive ? 0.48 : 0.32,
-                              ),
-                              borderRadius: BorderRadius.circular(999),
+              // Keep the hit box the same narrow width as the visible pill.
+              // The empty track and the parent's edge inset pass straight
+              // through to Android gesture navigation.
+              final pill = widget.immersive ? 7.0 : 6.0;
+              return SizedBox(
+                key: _trackKey,
+                width: 18,
+                child: Stack(
+                  children: [
+                    Positioned(
+                      top: thumbTop,
+                      height: thumbHeight,
+                      left: (18.0 - pill) / 2,
+                      width: pill,
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTapUp: (d) {
+                          final dy = _trackDy(d.globalPosition);
+                          if (dy == null) return;
+                          _drag(dy, height, thumbHeight);
+                          _endDrag();
+                        },
+                        onVerticalDragStart: (d) {
+                          final dy = _trackDy(d.globalPosition);
+                          if (dy != null) _drag(dy, height, thumbHeight);
+                        },
+                        onVerticalDragUpdate: (d) {
+                          final dy = _trackDy(d.globalPosition);
+                          if (dy != null) _drag(dy, height, thumbHeight);
+                        },
+                        onVerticalDragEnd: (_) => _endDrag(),
+                        onVerticalDragCancel: _endDrag,
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 120),
+                          width: pill,
+                          height: thumbHeight,
+                          decoration: BoxDecoration(
+                            color: cs.onSurface.withValues(
+                              alpha: widget.immersive ? 0.48 : 0.32,
                             ),
+                            borderRadius: BorderRadius.circular(999),
                           ),
                         ),
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
               );
             },
@@ -371,6 +368,7 @@ class _ChatViewState extends State<ChatView> {
   RegExp? _compiledRegex;
   bool _wide = false;
   late int _settingsRevision;
+  late String _aliasSignature;
   List<ActivityBucket> _activity = const [];
   String _activitySig = '';
   Map<String, int> _monthIndex = const {};
@@ -432,6 +430,7 @@ class _ChatViewState extends State<ChatView> {
   void initState() {
     super.initState();
     _settingsRevision = settings.revision;
+    _aliasSignature = _aliasesForMatching();
     _lastSavedPosT = settings.chatPos[widget.chat.key];
     recompute();
     _msgCount = widget.chat.messages.length;
@@ -452,6 +451,12 @@ class _ChatViewState extends State<ChatView> {
     );
   }
 
+  String _aliasesForMatching() {
+    final entries = settings.aliases.entries.toList()
+      ..sort((a, b) => a.key.compareTo(b.key));
+    return entries.map((e) => '${e.key}\u0000${e.value}').join('\u0001');
+  }
+
   @override
   void didUpdateWidget(covariant ChatView oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -461,9 +466,13 @@ class _ChatViewState extends State<ChatView> {
     }
     if (_settingsRevision != settings.revision) {
       _settingsRevision = settings.revision;
-      // Aliases and search settings can change which messages match. With an
-      // active query the in-place view is filtered, so rebuild its matches.
-      if (query.isNotEmpty) recompute();
+      // Only aliases can change which messages match. Other setting changes
+      // (theme, sliders, rail visibility) must not re-sort a 20k-message view.
+      final aliases = _aliasesForMatching();
+      if (aliases != _aliasSignature) {
+        _aliasSignature = aliases;
+        if (query.isNotEmpty) recompute();
+      }
       _pics = null; // captions use display names, even without a query
     }
     if (oldWidget.initialTarget != widget.initialTarget) {
@@ -587,7 +596,7 @@ class _ChatViewState extends State<ChatView> {
     }
     final inPlace = !panelMode && q.isNotEmpty;
     final sig =
-        '$sender|$mediaOnly|${sort.index}|$useRegex|$caseSensitive|${inPlace ? q : ''}|${widget.chat.messages.length}';
+        '$sender|$mediaOnly|${sort.index}|$useRegex|$caseSensitive|${inPlace ? q : ''}|${widget.chat.messages.length}|$_aliasSignature';
     if (sig != _viewSig) {
       // The list itself changed: rebuild it from scratch at its start position.
       _viewSig = sig;
@@ -1764,7 +1773,7 @@ class _ChatViewState extends State<ChatView> {
         ),
         CheckboxMenuButton(
           style: _roundedMenuItemStyle,
-          value: settings.showActivityRail && !settings.immersiveMode,
+          value: settings.showActivityRail,
           onChanged: (_) => handleMenu(_ChatMenuAction.miniMap),
           child: const Text('Activity rail'),
         ),
@@ -3084,8 +3093,8 @@ class _ChatViewState extends State<ChatView> {
                         if (showPositionBar)
                           Positioned(
                             right: panelSide ? 373 : 12,
-                            top: 6,
-                            bottom: 6,
+                            top: 12,
+                            bottom: 12,
                             child: ValueListenableBuilder<bool>(
                               valueListenable: _immersiveBarVisible,
                               builder: (context, flashed, _) {

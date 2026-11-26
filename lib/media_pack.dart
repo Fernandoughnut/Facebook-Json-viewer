@@ -277,20 +277,22 @@ MediaPackPlan planMediaPack(
 MediaPackPlan pruneUnreadableMediaPack(MediaPackPlan plan) {
   final kept = <MediaPackFile>[];
   final unreadable = <String>[...plan.unreadable];
+  final unreadableSet = unreadable.toSet();
   for (final f in plan.files) {
     if (File(f.path).existsSync()) {
       kept.add(f);
-    } else if (!unreadable.contains(f.name)) {
+    } else if (unreadableSet.add(f.name)) {
       unreadable.add(f.name);
     }
   }
   if (unreadable.length == plan.unreadable.length) return plan;
 
   final missing = <String>[...plan.missing];
+  final missingSet = missing.toSet();
   for (final ref in plan.references) {
-    if (unreadable.contains(ref.packedAs)) {
+    if (unreadableSet.contains(ref.packedAs)) {
       final name = ref.originalName.isEmpty ? ref.uri : ref.originalName;
-      if (name.isNotEmpty && !missing.contains(name)) missing.add(name);
+      if (name.isNotEmpty && missingSet.add(name)) missing.add(name);
     }
   }
   return plan.copyWith(files: kept, missing: missing, unreadable: unreadable);

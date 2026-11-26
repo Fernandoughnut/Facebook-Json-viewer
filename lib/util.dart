@@ -194,11 +194,18 @@ bool messageMatches(Msg m, String q, {String? sender, bool mediaOnly = false}) {
   if (mediaOnly && m.media.isEmpty) return false;
   if (q.isEmpty) return true;
   final lq = q.toLowerCase();
+  final alias = gSettings?.lowerAliasFor(m.sender) ?? m.lowerSender;
   return m.lower.contains(lq) ||
-      m.sender.toLowerCase().contains(lq) ||
-      displayName(m.sender).toLowerCase().contains(lq) ||
-      (m.share.isNotEmpty && m.share.toLowerCase().contains(lq)) ||
-      m.media.any((x) => x.name.toLowerCase().contains(lq));
+      m.lowerSender.contains(lq) ||
+      alias.contains(lq) ||
+      (m.lowerShare.isNotEmpty && m.lowerShare.contains(lq)) ||
+      m.lowerMediaNames.any((name) => name.contains(lq));
+}
+
+/// True for HTTP(S) links, which open in the browser instead of a local player.
+bool isWebLink(String value) {
+  final uri = Uri.tryParse(value.trim());
+  return uri != null && (uri.scheme == 'http' || uri.scheme == 'https');
 }
 
 bool isImagePath(String p) {
@@ -206,13 +213,25 @@ bool isImagePath(String p) {
   return const ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'].contains(ext);
 }
 
-Future<void> openExternal(String path, BuildContext context) async {
+Future<void> openExternal(String target, BuildContext context) async {
+  // Links are the common case on Android: ACTION_VIEW with an http(s) Uri
+  // opens the browser. Local media remains Linux-only because app-private file
+  // paths are not readable by other Android apps without a content provider.
+  if (Platform.isAndroid && isWebLink(target)) {
+    final opened = await AndroidFolderPicker.openLink(target);
+    if (!opened && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No browser could open that link.')),
+      );
+    }
+    return;
+  }
   if (!Platform.isLinux) {
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
-            'Opening video and audio on this platform comes in the next step.',
+            'Opening local files is supported on Linux. Links open in a browser.',
           ),
         ),
       );
@@ -220,12 +239,12 @@ Future<void> openExternal(String path, BuildContext context) async {
     return;
   }
   try {
-    final r = await Process.run('xdg-open', [path]);
+    final r = await Process.run('xdg-open', [target]);
     if (r.exitCode != 0 && context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            'Could not open ${path.split(pathSep).last}: ${r.stderr}'.trim(),
+            'Could not open ${target.split(pathSep).last}: ${r.stderr}'.trim(),
           ),
         ),
       );
@@ -381,12 +400,6 @@ class _FolderImportDialog extends StatelessWidget {
       ),
     );
   }
-}
-
-/// File names from [safeFileName] are used when copying content:// picks.
-String safeMediaFileName(String name) {
-  final clean = name.replaceAll(RegExp(r'[\\/:*?"<>|\r\n]'), '_').trim();
-  return clean.isEmpty ? 'media' : clean;
 }
 
 /// All .json files under a folder, recursively. Used for bulk import.

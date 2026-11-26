@@ -165,8 +165,17 @@ Future<void> showMsgDetails(
                       child: const Text('Copy text'),
                     ),
                   TextButton(
-                    onPressed: () =>
-                        Clipboard.setData(ClipboardData(text: json)),
+                    onPressed: () {
+                      Clipboard.setData(ClipboardData(text: json));
+                      if (ctx.mounted) {
+                        ScaffoldMessenger.of(ctx).showSnackBar(
+                          const SnackBar(
+                            content: Text('Message JSON copied'),
+                            duration: Duration(seconds: 1),
+                          ),
+                        );
+                      }
+                    },
                     child: const Text('Copy JSON'),
                   ),
                   TextButton(

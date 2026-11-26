@@ -142,10 +142,10 @@ class Store extends ChangeNotifier {
         if (mediaOnly && m.media.isEmpty) continue;
         final hit =
             m.lower.contains(q) ||
-            m.sender.toLowerCase().contains(q) ||
-            settings.aliasFor(m.sender).toLowerCase().contains(q) ||
-            (m.share.isNotEmpty && m.share.toLowerCase().contains(q)) ||
-            m.media.any((x) => x.name.toLowerCase().contains(q));
+            m.lowerSender.contains(q) ||
+            settings.lowerAliasFor(m.sender).contains(q) ||
+            (m.lowerShare.isNotEmpty && m.lowerShare.contains(q)) ||
+            m.lowerMediaNames.any((name) => name.contains(q));
         if (!hit) continue;
         if (out.length >= limit) {
           truncated = true;
@@ -214,20 +214,11 @@ class Store extends ChangeNotifier {
           return direct;
         }
         // An originalSorted pack keeps the relative folders under `media/`.
-        // Match the tail of the URI before falling back to a basename so two
-        // different `a.jpg` files can stay distinct.
-        if (candidate.contains('/') && d.paths.isNotEmpty) {
-          final suffix = '/$candidate';
-          final matches = <MapEntry<String, String>>[];
-          for (final e in d.paths.entries) {
-            if (e.key.endsWith(suffix)) matches.add(e);
-          }
-          matches.sort((a, b) {
-            final byLength = a.key.length.compareTo(b.key.length);
-            return byLength != 0 ? byLength : a.key.compareTo(b.key);
-          });
-          for (final e in matches) {
-            if (checked.add(e.value) && _isMediaFile(e.value)) return e.value;
+        // The folder's tail index makes this a map lookup instead of a scan of
+        // every indexed path for every media reference.
+        if (candidate.contains('/')) {
+          for (final path in d.suffixes[candidate] ?? const <String>[]) {
+            if (checked.add(path) && _isMediaFile(path)) return path;
           }
         }
         // Old flat media folders only have a basename index.
@@ -278,7 +269,8 @@ class Store extends ChangeNotifier {
   }
 
   MediaStats statsFor(Chat chat) {
-    final key = '${chat.key}|${chat.messages.length}|$mediaVersion';
+    final key =
+        '${chat.key}|${chat.messages.length}|$mediaVersion|$dataRevision';
     final cached = _mediaStats[key];
     if (cached != null) return cached;
 
@@ -376,18 +368,35 @@ class Store extends ChangeNotifier {
   static String messageKey(Msg m) =>
       m.id.isNotEmpty ? m.id : '${m.t}|${m.sender}';
 
+  Map<String, Set<String>>? _bookmarkSets;
+
+  Map<String, Set<String>> get _bookmarkIndex {
+    final cached = _bookmarkSets;
+    if (cached != null) return cached;
+    return _bookmarkSets = {
+      for (final entry in settings.bookmarks.entries)
+        entry.key: entry.value.toSet(),
+    };
+  }
+
   bool isBookmarked(Chat c, Msg m) =>
-      settings.bookmarks[c.key]?.contains(messageKey(m)) ?? false;
+      _bookmarkIndex[c.key]?.contains(messageKey(m)) ?? false;
 
   void toggleBookmark(Chat c, Msg m) {
     final list = settings.bookmarks.putIfAbsent(c.key, () => <String>[]);
+    final keys = _bookmarkIndex.putIfAbsent(c.key, () => <String>{});
     final k = messageKey(m);
-    if (list.contains(k)) {
+    final removing = !keys.add(k);
+    if (removing) {
+      keys.remove(k);
       list.remove(k);
     } else {
       list.add(k);
     }
-    if (list.isEmpty) settings.bookmarks.remove(c.key);
+    if (list.isEmpty) {
+      settings.bookmarks.remove(c.key);
+      _bookmarkIndex.remove(c.key);
+    }
     bookmarkRevision++;
     settings.save();
     notifyListeners();
@@ -434,6 +443,11 @@ class Store extends ChangeNotifier {
   /// between runs. Keep a durable copy for anything we decide to remember.
   Future<String> _persistJsonPath(String path) async {
     if (!Platform.isAndroid) return path;
+    // A SAF import and this method both live under importDir. Never re-copy a
+    // durable app-private file into the flat imports folder on restore.
+    if (path.startsWith('${settings.importDir}${Platform.pathSeparator}')) {
+      return path;
+    }
     final src = File(path);
     if (!await src.exists()) return path;
     final dir = Directory(settings.importDir);
@@ -443,8 +457,13 @@ class Store extends ChangeNotifier {
     final name = clean.isEmpty ? 'import.json' : clean;
     var target = File('${dir.path}${Platform.pathSeparator}$name');
     if (await target.exists()) {
-      // Reuse an identical copy instead of duplicating every restore.
-      if ((await target.stat()).size == (await src.stat()).size) {
+      // Reuse an unchanged copy instead of duplicating every restore. Size
+      // alone is not enough: two exports can share a size after an edit.
+      final srcStat = await src.stat();
+      final targetStat = await target.stat();
+      if (targetStat.size == srcStat.size &&
+          targetStat.modified.microsecondsSinceEpoch ==
+              srcStat.modified.microsecondsSinceEpoch) {
         return target.path;
       }
       target = File(
@@ -460,6 +479,11 @@ class Store extends ChangeNotifier {
     List<String> paths, {
     bool remember = true,
     bool reviveRemoved = false,
+
+    /// Set false when [paths] are already durable app-private files (Android
+    /// SAF JSON imports), so nested folders keep their names and are not copied
+    /// a second time into the flat `imports/` directory.
+    bool persist = true,
   }) async {
     var added = 0;
     var duplicates = 0;
@@ -479,7 +503,7 @@ class Store extends ChangeNotifier {
     notifyListeners();
     try {
       for (final picked in paths) {
-        final path = await _persistJsonPath(picked);
+        final path = persist ? await _persistJsonPath(picked) : picked;
         final name = path.split(pathSep).last;
         // An explicit re-add must be re-read even if another chat from the
         // same file is still loaded; the per-thread guard below prevents
@@ -515,7 +539,6 @@ class Store extends ChangeNotifier {
                 (_pathsForChat[t.key]?.contains(path) ?? false)) {
               continue;
             }
-            touched.add(t.key);
             final owners = _pathsForChat.putIfAbsent(t.key, () => <String>{});
             if (!owners.contains(path)) owners.add(path);
             final c = chats.putIfAbsent(t.key, () => Chat(t.key, t.title));
@@ -528,6 +551,7 @@ class Store extends ChangeNotifier {
                 continue;
               }
               c.messages.add(m);
+              touched.add(t.key);
               added++;
             }
           }
@@ -551,19 +575,24 @@ class Store extends ChangeNotifier {
     } finally {
       _busy--;
     }
-    // Only chats that received messages can have become unsorted.
-    for (final key in touched) {
-      chats[key]?.messages.sort((a, b) => (a.t ?? 0).compareTo(b.t ?? 0));
+    // Only chats that actually received messages can have become unsorted.
+    // Re-picking a fully duplicated export still updates the remembered path,
+    // but must not invalidate the reply index or every cached insight.
+    var replies = 0;
+    if (added > 0) {
+      for (final key in touched) {
+        chats[key]?.messages.sort((a, b) => (a.t ?? 0).compareTo(b.t ?? 0));
+      }
+      _mediaStats.clear();
+      replies = rebuildReplyIndex();
+      dataRevision++;
     }
-    _mediaStats.clear();
-    final replies = rebuildReplyIndex();
-    dataRevision++;
     if (remember || prunedRememberedPath) settings.save();
     status =
         'Loaded $added messages.'
         '${duplicates > 0 ? ' Skipped $duplicates duplicates.' : ''}'
         '${skippedRemoved > 0 ? ' Skipped $skippedRemoved removed conversation(s).' : ''}'
-        '${replies > 0 ? ' $replies of them are replies.' : ''}'
+        '${replies > 0 ? ' Linked $replies reply references.' : ''}'
         '${problems.isEmpty ? '' : ' Problems: ${problems.join(' | ')}'}';
     notifyListeners();
   }
@@ -670,7 +699,10 @@ class Store extends ChangeNotifier {
       }
     }
     settings.chatPos.remove(c.key);
-    if (settings.bookmarks.remove(c.key) != null) bookmarkRevision++;
+    if (settings.bookmarks.remove(c.key) != null) {
+      _bookmarkSets?.remove(c.key);
+      bookmarkRevision++;
+    }
     settings.chatDirs.remove(c.key);
     final prefix = '${c.key}|';
     settings.notes.removeWhere((key, _) => key.startsWith(prefix));
@@ -724,6 +756,7 @@ class Store extends ChangeNotifier {
     settings.chatDirs = {};
     settings.chatPos = {};
     settings.lastChat = '';
+    _bookmarkSets = null;
     settings.save();
   }
 
@@ -731,6 +764,7 @@ class Store extends ChangeNotifier {
     chats.clear();
     _replyIndex.clear();
     _mediaStats.clear();
+    _bookmarkSets = null;
     _pathsForChat.clear();
     _loadedPaths.clear();
     sharedDirs.clear();

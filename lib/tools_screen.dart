@@ -603,21 +603,36 @@ class _InsightsTabState extends State<InsightsTab> {
   }
 }
 
-class LinksTab extends StatelessWidget {
+class LinksTab extends StatefulWidget {
   final Store store;
   const LinksTab({super.key, required this.store});
 
   @override
+  State<LinksTab> createState() => _LinksTabState();
+}
+
+class _LinksTabState extends State<LinksTab> {
+  final List<({Chat chat, Msg msg})> _links = [];
+  int _dataRevision = -1;
+
+  void _refresh() {
+    if (_dataRevision == widget.store.dataRevision) return;
+    _dataRevision = widget.store.dataRevision;
+    _links.clear();
+    for (final c in widget.store.chats.values) {
+      for (final m in c.messages) {
+        if (m.share.isNotEmpty) _links.add((chat: c, msg: m));
+      }
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: store,
+      listenable: widget.store,
       builder: (context, _) {
-        final links = <({Chat chat, Msg msg})>[];
-        for (final c in store.chats.values) {
-          for (final m in c.messages) {
-            if (m.share.isNotEmpty) links.add((chat: c, msg: m));
-          }
-        }
+        _refresh();
+        final links = _links;
         if (links.isEmpty) {
           return const Center(child: Text('No shared links found.'));
         }
@@ -902,6 +917,9 @@ class _DuplicateDialogState extends State<_DuplicateDialog> {
   @override
   Widget build(BuildContext context) {
     final groups = _groups;
+    // Map.values.elementAt() is linear, which makes a scrolled list of many
+    // duplicate groups quadratic. Materialize once per rebuild instead.
+    final groupPaths = groups?.values.toList(growable: false);
     final dialogHeight = MediaQuery.of(context).size.height * 0.55;
     return AlertDialog(
       title: Text(
@@ -928,9 +946,9 @@ class _DuplicateDialogState extends State<_DuplicateDialog> {
             : groups.isEmpty
             ? const Center(child: Text('No identical files found.'))
             : ListView.builder(
-                itemCount: groups.length,
+                itemCount: groupPaths!.length,
                 itemBuilder: (context, i) {
-                  final paths = groups.values.elementAt(i);
+                  final paths = groupPaths[i];
                   return ExpansionTile(
                     title: Text('${paths.length} copies'),
                     subtitle: Text(

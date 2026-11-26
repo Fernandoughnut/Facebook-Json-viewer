@@ -152,6 +152,7 @@ class AppSettings extends ChangeNotifier {
       {}; // conversation key -> time of the message you were reading
   Map<String, String> aliases =
       {}; // original participant name -> friendly name
+  final Map<String, String> _lowerAliases = {};
   Map<String, List<String>> bookmarks = {}; // conversation key -> message keys
   Map<String, String> notes = {}; // 'conversationKey|messageKey' -> note
   Set<String> archivedChats = {}; // hidden from the list until "Show archived"
@@ -514,6 +515,7 @@ class AppSettings extends ChangeNotifier {
       }
     }
     aliases = al;
+    _lowerAliases.clear();
 
     final bm = <String, List<String>>{};
     final bj = j['bookmarks'];
@@ -590,9 +592,9 @@ class AppSettings extends ChangeNotifier {
 
   Future<void> _writeNow() async {
     try {
-      // state.json is small. Synchronous I/O guarantees the write completes
-      // before Android can kill a backgrounded process, which matters because
-      // lifecycle callbacks cannot await an async file write.
+      // state.json is small, so the synchronous write normally finishes before
+      // Android can kill a backgrounded process. Lifecycle callbacks cannot
+      // await async writes; a crash can still lose the very last change.
       final f = File(filePath);
       f.parent.createSync(recursive: true);
       // Write to a temporary file first: a crash mid-write must not leave a
@@ -627,6 +629,10 @@ class AppSettings extends ChangeNotifier {
   /// Friendly name for a participant, falling back to the name in the export.
   String aliasFor(String name) => aliases[name] ?? name;
 
+  /// Cached lower-case alias for the search matcher.
+  String lowerAliasFor(String name) =>
+      _lowerAliases.putIfAbsent(name, () => aliasFor(name).toLowerCase());
+
   void setAlias(String original, String alias) {
     final v = alias.trim();
     update(() {
@@ -635,6 +641,7 @@ class AppSettings extends ChangeNotifier {
       } else {
         aliases[original] = v;
       }
+      _lowerAliases.clear();
     });
   }
 

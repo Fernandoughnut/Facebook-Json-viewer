@@ -1,188 +1,70 @@
 # Changelog
 
-All notable changes to Indexed are documented in this file.
+## 1.5.0 (unreleased)
 
-The format is based on Keep a Changelog, and versions follow Semantic Versioning.
-
-## [Unreleased]
-
-Planned next:
-
-- Device validation on the Android 17 AOSP phone.
-- Edge-to-edge, back-gesture and touch-layout checks.
+A major refinement pass across Linux and Android. Themes, media, navigation and
+large-conversation performance were tightened, and Android gained complete
+folder JSON import plus link handling.
 
 ### Added
 
-- Immersive conversation mode: the search bar and its filter controls detach
-  from the layout and float above the conversation as a translucent pill. The
-  pill fades while reading and returns from a small immersive button at the
-  top-left; the people-filter eye stays available even while it is hidden. No
-  activity rail is shown, and the overlay position bar appears only after a
-  sustained fast scroll. Toggle it from the chat menu or Settings; the choice
-  persists across chats and launches.
-- Conversation-scoped **Pack media (ZIP)**: the chat menu and media info dialog
-  now bundle only the files that conversation references. Files keep their
-  original bytes and ship with `conversation.json` plus a manifest mapping the
-  hashed export URIs to the packed files. A confirmation dialog lets you choose
-  **original names in chronological order** (`media/<original path>`, best for
-  adding the extracted folder back to the conversation) or readable
-  `date_sender_originalname` names. Repeated references may be packed once or
-  as separate copies; missing references are recorded in the manifest. Android
-  saves through a native SAF stream, so even large archives do not cross the
-  method channel in memory.
-- Real Indexed launcher artwork: adaptive Android icons (including monochrome)
-  and a bundled Linux window icon.
+- Conversation media packs: bundle only the files a chat references, with
+  byte-for-byte originals, a manifest, and a choice of re-importable original
+  paths or readable `date_sender_name` names. Android writes archives through a
+  native SAF stream, so large packs never cross the method channel in memory.
+- Immersive reading mode: a floating translucent search pill, the people-filter
+  eye always available, no activity rail, and a position bar that appears only
+  during sustained fast scrolling.
+- Real Indexed launcher artwork for Android (including monochrome) and a Linux
+  window icon.
+- Android SAF folder import for exported `.json` files, with refresh on
+  re-picking, and `http(s)` links from messages opening in the browser.
+- Copy JSON in Message details now confirms on screen.
 
 ### Changed
 
-- The left-side activity rail is now off by default on Linux and Android. Older
-  state files are migrated off once, then user choices are respected.
-- The right-hand position bar is now a rounded overlay pill with no divider and
-  no allocated width, so the conversation never resizes around it.
-- Android system Back now returns from an open conversation to the chat list,
-  leaves dialogs intact, and exits cleanly from the chat list.
-- Parse cache files are written incrementally, avoiding a second full copy of
-  every message in memory on large exports.
-- The long-lived import dedupe index stores compact hashes instead of full
-  message text, and only chats that received new messages are re-sorted.
-- Stale and interrupted parse cache files are pruned on startup, the media-stat
-  cache is bounded, and `.part` / `.tmp` files are ignored by media scanning.
-- The "Open conversations at" setting uses a dropdown on narrow screens, so all
-  three choices fit without sideways scrolling.
-- Inline photos and gallery tiles decode at the screen's real pixel density,
-  and the full-screen viewer decodes the original image instead of a
-  logical-pixel-width copy. Imported media itself remains byte-for-byte.
-- Media folders now index relative paths as well as file names, so
-  `photos/a.jpg` and `videos/a.jpg` stay distinct. A stale folder entry no
-  longer shadows a valid copy in a later folder.
+- The activity rail is off by default on Linux and Android; existing settings
+  are migrated once. The position bar is a narrow overlay pill that does not
+  resize the conversation or block Android edge gestures.
+- Global search, in-chat filtering and the bookmark tools refresh only when the
+  underlying data changes. Search fields and aliases are lower-cased lazily and
+  cached, and the long-lived dedupe index stores compact hashes.
+- Media folders index relative paths as well as file names, so identical
+  basenames in different folders stay distinct. Duplicate references and files
+  that vanished after indexing are reported explicitly.
+- Parse caches are written incrementally and pruned on startup; interrupted
+  `.part` / `.tmp` files are ignored.
+- Android imports stream SAF documents into app-private storage, show progress,
+  can be cancelled, and detect edits by size and modification time. Settings
+  are written synchronously at lifecycle pauses.
+- Release builds ship a Linux bundle plus a universal APK, split APKs, and a
+  SHA-256 checksum for every asset. The debug-signed identity is for sideloading
+  only; uninstall an older Indexed APK before updating.
 
 ### Fixed
 
-- Explicitly opening a JSON again revives a conversation that was removed from
-  the app. Startup restore still skips removed conversations, and re-picking a
-  file shared by several conversations no longer duplicates messages.
-- Large media packs no longer silently collapse distinct files that share a
-  file name, and the dialog now explains references versus unique files.
-  Files that vanish after a folder was indexed are listed instead of being
-  silently omitted.
-- Media ZIP names include milliseconds, so packing twice in the same second no
-  longer overwrites the first archive.
-- Android export progress listeners are now shared safely; finishing one pack
-  no longer stops progress updates for another.
-- Pack confirmation and success messages use proper singular/plural wording.
-- Overlapping imports still dedupe correctly after the compact index change.
-- Only the position bar's pill itself is hit-testable now. Touching the empty
-  track no longer jumps immediately or steals Android gesture Back swipes.
-- Immersive mode's overlay bar now appears reliably on sustained fast flings,
-  even when Flutter coalesces scroll notifications, without flashing on a quick
-  flick.
-- The floating immersive pill no longer reserves header space, so entering or
-  leaving immersive mode never resizes the conversation.
-- The immersive overflow menu no longer closes itself when you scroll inside
-  it: floating controls stay pinned until the menu closes.
-- Settings search now finds Immersive mode and the start-position options.
-- Photos no longer look soft on high-density screens because of fixed 2x or
-  logical-pixel decode widths.
+- Explicitly reopening a JSON revives a removed conversation; startup restore
+  still skips removed chats. Re-picking a shared export no longer duplicates
+  messages.
+- Alias changes rebuild in-place filtered chat views. Bookmark caches are
+  invalidated when chats or all data are removed.
+- Repeated media packs no longer collapse same-named files or overwrite an
+  archive created in the same second.
+- The immersive overlay no longer closes on scroll, and its controls no longer
+  reserve header space.
+- Conversation context menus no longer offer `Open conversation`; copy and
+  bookmark actions live only in Message details.
+- Android folder imports no longer leave truncated files, merge sanitized
+  names, or flatten nested JSON files on import.
 
-## [1.3.0] - 2026-11-26
+## 1.3.0
 
-### Added
+Android sideload builds, app-private state, SAF media folders, a floating date
+pill, hideable rails/bars, people-filter dialog, Message details actions, and
+tighter reading layouts.
 
-- Repeatable Android sideload build script (`tool/build_android.sh`) producing
-  a universal APK plus split APKs for `arm64-v8a`, `armeabi-v7a` and `x86_64`,
-  each with a SHA-256 checksum.
-- `CHANGELOG.md` tracking notable changes.
-- A floating date pill in chats shows the date of the messages in the middle of
-  the viewport while scrolling (on Linux and Android).
-- Optional auto-hide header: scrolling down collapses search into a slim strip
-  with a search pill, the people-filter eye and an expand button. The eye is
-  always available.
-- The right-side position bar can now be hidden from Settings or the chat menu,
-  independently of the month activity rail (both Linux and Android).
-- Optional "Show time once per minute": in date-sorted chats only the last
-  message of a minute shows a time, reducing clutter in busy conversations.
+## 1.2.0
 
-### Changed
-
-- Temporary media folders, test fixtures and generated export filenames now use
-  `indexed_` prefixes instead of `fb_viewer_`. Package and config names stay
-  `fb_viewer` for compatibility.
-- Android now stores settings, imported JSON and media folders in app-private
-  storage instead of `$HOME/.config` and temporary directories.
-- Android media selection uses the system folder picker again. A native SAF
-  bridge streams photos and videos into app storage so large mixed folders can
-  be indexed without gallery multi-select. The import now shows file-by-file
-  progress and can be cancelled.
-- Android folder imports list files first, use a larger buffer and avoid extra
-  provider queries per file. Re-picking an unchanged folder no longer rescans
-  the whole chat's media references.
-- People filters now open in their own dialog instead of pushing the search bar
-  down. The eye icon opens the dialog from either the full or collapsed header.
-- Copy and bookmark actions moved from every message bubble into Message
-  details (right-click / long-press / click the time). Consecutive messages from
-  the same sender now use tighter vertical spacing.
-
-### Fixed
-
-- Settings, saved session and opened JSON files no longer disappear after the
-  Android app is closed or killed in the background.
-- `state.json` is now written synchronously on lifecycle pauses, so a fast app
-  switch cannot lose the last settings change.
-- The Android media button no longer opens a photo picker or rejects `content://`
-  folder handles; picked folders are imported and persisted across restarts.
-- Android folder imports no longer leave truncated files behind when interrupted,
-  mix up names that sanitize to the same value, or abort everything because one
-  document was unreadable.
-- Long-pressing a message on Android now opens Message details, matching
-  right-click on Linux. Hidden-by-grouping timestamps no longer leave stray
-  info icons under earlier messages.
-
-## [1.2.0] - 2026-11-26
-
-### Added
-
-- Automated Linux release workflow triggered by `v*` tags, attaching the
-  release tarball and SHA-256 checksum.
-- Local packaging script `tool/package_linux.sh`, which archives the whole
-  release bundle with the required trailing `.`.
-- Index-based right-side scrollbar for large conversations, avoiding pixel
-  layout of tens of thousands of variable-height bubbles.
-- Explicit **Copy text** action on messages and in Message details.
-- Export-dialog warning when **Original JSON** is requested but raw data was
-  not kept in memory.
-- Release workflow check that the pushed tag matches `pubspec.yaml`.
-- Synchronous breadcrumbs in `error.log` for startup, imports, conversation
-  opens, global search, tools and Insights analysis.
-
-### Changed
-
-- Display name is now **Indexed** across Linux and Android.
-- Android namespace, applicationId and Kotlin package renamed to
-  `dev.local.indexed`; the Dart package and config folder remain `fb_viewer`
-  so existing data keeps working.
-- Activity rail scrubbing now uses lightweight index jumps during drag and one
-  full jump on release.
-- The index scrollbar thumb follows the pointer locally, throttles list jumps
-  and stays in place until the list catches up.
-- Bubble text uses plain `Text` / `Text.rich` instead of `SelectableText` to
-  make jumps cheaper; selectable text remains available in Message details.
-- "Where I left off" now works in both oldest-first and newest-first date sorts.
-- Scrollbar and rail indicators update under all sort modes; saved reading
-  positions remain limited to date-sorted views.
-- Large-export warning threshold lowered to 8 MB.
-- Image cache reduced to 160 MB / 1200 images.
-- Parse cache, global search limit/truncation and Insights analysis hardened.
-- UI spacing pass: cleaner scrollbars, padding, rounded selected tiles and
-  more breathing room around bubbles and rows.
-- README updated for release packaging and early Android support.
-
-### Fixed
-
-- Native pixel scrollbar no longer freezes large chats or forces mass layout
-  of all previous variable-height bubbles.
-- Scrollbar thumb no longer snaps back before the final jump lands.
-- Scrollbar and activity-rail positions no longer freeze in non-date sort modes.
-- Initial thumb position corrected for newest-first / reversed conversations.
-- Activity-rail drag no longer rebuilds toolbars or restarts the highlight
-  timer on every pointer event.
-- Release archives, checksums and Android APK/AAB outputs are excluded from Git.
+Linux release packaging and tag checks, index-based scrolling, explicit copy
+text, export warnings, breadcrumbs, the Indexed rename and `dev.local.indexed`
+Android identity.

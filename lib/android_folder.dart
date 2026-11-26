@@ -18,9 +18,7 @@ class AndroidFolderPicker {
   static Future<String?> pick() async {
     try {
       return await _channel.invokeMethod<String>('pickFolder');
-    } on PlatformException {
-      return null;
-    } on MissingPluginException {
+    } catch (_) {
       return null;
     }
   }
@@ -28,6 +26,21 @@ class AndroidFolderPicker {
   /// Copies the picked tree's media files into [destDir]. Progress frames from
   /// Kotlin are forwarded to [onProgress] while the copy is running.
   static Future<Map<String, dynamic>> import(
+    String uri,
+    String destDir, {
+    void Function(Map<String, dynamic>)? onProgress,
+  }) => _copyTree('importFolder', uri, destDir, onProgress: onProgress);
+
+  /// Copies exported `.json` documents from a SAF tree into app-private
+  /// storage. Returns the list of copied paths for `Store.addJsonFiles`.
+  static Future<Map<String, dynamic>> importJson(
+    String uri,
+    String destDir, {
+    void Function(Map<String, dynamic>)? onProgress,
+  }) => _copyTree('importJsonFolder', uri, destDir, onProgress: onProgress);
+
+  static Future<Map<String, dynamic>> _copyTree(
+    String method,
     String uri,
     String destDir, {
     void Function(Map<String, dynamic>)? onProgress,
@@ -41,10 +54,11 @@ class AndroidFolderPicker {
       }
     });
     try {
-      final result = await _channel.invokeMapMethod<String, dynamic>(
-        'importFolder',
-        {'uri': uri, 'destDir': destDir, 'importId': importId},
-      );
+      final result = await _channel.invokeMapMethod<String, dynamic>(method, {
+        'uri': uri,
+        'destDir': destDir,
+        'importId': importId,
+      });
       return result ?? <String, dynamic>{};
     } on PlatformException catch (e) {
       return <String, dynamic>{'error': e.message ?? e.code};
@@ -52,8 +66,21 @@ class AndroidFolderPicker {
       return <String, dynamic>{
         'error': e.message ?? 'Folder importer unavailable',
       };
+    } catch (e) {
+      return <String, dynamic>{'error': e.toString()};
     } finally {
       _channel.setMethodCallHandler(null);
+    }
+  }
+
+  /// Opens a web link in the user's browser. Local files are not shared with
+  /// other apps: they stay inside Indexed's private storage on Android.
+  static Future<bool> openLink(String url) async {
+    try {
+      return await _channel.invokeMethod<bool>('openLink', {'url': url}) ??
+          false;
+    } catch (_) {
+      return false;
     }
   }
 
@@ -68,8 +95,15 @@ class AndroidFolderPicker {
 
   /// Stable short name for a tree URI, so re-picking the same folder reuses
   /// the already imported files instead of duplicating them.
-  static String folderNameFor(String uri) =>
-      sha1.convert(utf8.encode(uri)).toString().substring(0, 12);
+  static String folderNameFor(String uri) {
+    // Providers sometimes differ only in the case of percent escapes. Normalize
+    // those without decoding separators, which could merge distinct folders.
+    final canonical = uri.replaceAllMapped(
+      RegExp(r'%[0-9a-fA-F]{2}'),
+      (m) => m.group(0)!.toUpperCase(),
+    );
+    return sha1.convert(utf8.encode(canonical)).toString().substring(0, 12);
+  }
 }
 
 /// Writes a locally built archive into an Android SAF folder. This keeps the
@@ -102,9 +136,7 @@ class AndroidMediaExport {
   static Future<String?> pickFolder() async {
     try {
       return await _channel.invokeMethod<String>('pickExportFolder');
-    } on PlatformException {
-      return null;
-    } on MissingPluginException {
+    } catch (_) {
       return null;
     }
   }
@@ -136,6 +168,8 @@ class AndroidMediaExport {
       return <String, dynamic>{
         'error': e.message ?? 'Media export is unavailable',
       };
+    } catch (e) {
+      return <String, dynamic>{'error': e.toString()};
     } finally {
       _listeners.remove(exportId);
     }

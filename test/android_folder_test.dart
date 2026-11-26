@@ -14,5 +14,10 @@ void main() {
     expect(name, matches(RegExp(r'^[0-9a-f]+$')));
     expect(name, AndroidFolderPicker.folderNameFor(uri));
     expect(name, isNot(AndroidFolderPicker.folderNameFor('$uri/other')));
+    // Escape case is a provider detail, not a different folder.
+    expect(
+      name,
+      AndroidFolderPicker.folderNameFor(uri.replaceFirst('%3A', '%3a')),
+    );
   });
 }

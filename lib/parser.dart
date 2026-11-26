@@ -536,7 +536,7 @@ List<ParsedThread> parseFileCached(
 
   final stat = File(path).statSync();
   final sig =
-      '$cacheFormatVersion|$parserVersion|$path|${stat.size}|${stat.modified.millisecondsSinceEpoch}|${keepRaw ? 1 : 0}';
+      '$cacheFormatVersion|$parserVersion|$path|${stat.size}|${stat.modified.microsecondsSinceEpoch}|${keepRaw ? 1 : 0}';
   final file = File('$cacheDir/${_cacheHash(sig)}.json');
   try {
     if (file.existsSync()) {

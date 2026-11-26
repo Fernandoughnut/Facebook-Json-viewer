@@ -26,6 +26,7 @@ class MainActivity : FlutterActivity() {
             "mp4", "m4v", "mov", "avi", "mkv", "webm", "3gp",
             "heic", "heif",
         )
+        private val MEDIA_MIMES = listOf("image/", "video/", "audio/")
         private val INVALID_NAME = Regex("[\\\\/:*?\"<>|\\r\\n]")
     }
 
@@ -34,6 +35,7 @@ class MainActivity : FlutterActivity() {
         val relDir: String,
         val name: String,
         val size: Long,
+        val modified: Long,
     )
 
     private var folderChannel: MethodChannel? = null
@@ -48,6 +50,17 @@ class MainActivity : FlutterActivity() {
         if (activeImportId == id) activeImportId = null
     }
 
+    private fun cancelImport() = synchronized(this) { activeImportId = null }
+
+    private fun beginImport(id: String): Boolean = synchronized(this) {
+        if (activeImportId != null) {
+            false
+        } else {
+            activeImportId = id
+            true
+        }
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         val channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
@@ -56,10 +69,12 @@ class MainActivity : FlutterActivity() {
             when (call.method) {
                 "pickFolder" -> pickFolder(result)
                 "importFolder" -> importFolder(call, result)
+                "importJsonFolder" -> importJsonFolder(call, result)
                 "cancelImport" -> {
-                    activeImportId = null
+                    cancelImport()
                     result.success(null)
                 }
+                "openLink" -> openLink(call, result)
                 else -> result.notImplemented()
             }
         }
@@ -75,12 +90,48 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    override fun onDestroy() {
+        pendingFolderResult?.error(
+            "engine_stopped",
+            "The folder picker was closed by app shutdown",
+            null,
+        )
+        pendingExportFolderResult?.error(
+            "engine_stopped",
+            "The folder picker was closed by app shutdown",
+            null,
+        )
+        pendingFolderResult = null
+        pendingExportFolderResult = null
+        cancelImport()
+        super.onDestroy()
+    }
+
+    private fun openLink(call: MethodCall, result: MethodChannel.Result) {
+        val url = call.argument<String>("url")
+        if (url == null) {
+            result.success(false)
+            return
+        }
+        try {
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            startActivity(intent)
+            result.success(true)
+        } catch (e: Exception) {
+            result.success(false)
+        }
+    }
+
     private fun pickFolder(result: MethodChannel.Result) {
         val previous = pendingFolderResult
-        pendingFolderResult = result
         if (previous != null) {
             previous.error("in_progress", "A folder pick is already open", null)
+            result.error("in_progress", "A folder pick is already open", null)
+            return
         }
+        pendingFolderResult = result
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
             flags = flags or
                 Intent.FLAG_GRANT_READ_URI_PERMISSION or
@@ -97,10 +148,12 @@ class MainActivity : FlutterActivity() {
 
     private fun pickExportFolder(result: MethodChannel.Result) {
         val previous = pendingExportFolderResult
-        pendingExportFolderResult = result
         if (previous != null) {
             previous.error("in_progress", "A folder pick is already open", null)
+            result.error("in_progress", "A folder pick is already open", null)
+            return
         }
+        pendingExportFolderResult = result
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
             flags = flags or
                 Intent.FLAG_GRANT_READ_URI_PERMISSION or
@@ -184,15 +237,18 @@ class MainActivity : FlutterActivity() {
         Thread {
             try {
                 val name = safeName(fileName)
-                val target = tree.findFile(name)
-                    ?: tree.createFile("application/zip", name)
+                val existing = tree.findFile(name)
+                if (existing != null && !existing.delete()) {
+                    throw IllegalStateException("Could not replace $name")
+                }
+                val target = tree.createFile("application/zip", name)
                     ?: throw IllegalStateException("Could not create $name")
+                if (target.name != name) {
+                    throw IllegalStateException("Provider renamed $name to ${target.name}")
+                }
                 val total = source.length()
-                val out = try {
-                    contentResolver.openOutputStream(target.uri, "w")
-                } catch (_: Exception) {
-                    contentResolver.openOutputStream(target.uri)
-                } ?: throw IllegalStateException("Could not open $name for writing")
+                val out = contentResolver.openOutputStream(target.uri, "rwt")
+                    ?: throw IllegalStateException("Could not open $name for writing")
 
                 val buffer = ByteArray(BUFFER_SIZE)
                 var done = 0L
@@ -251,24 +307,24 @@ class MainActivity : FlutterActivity() {
             result.error("invalid_args", "uri and destDir are required", null)
             return
         }
-        if (activeImportId != null) {
+        val importId = call.argument<String>("importId")
+            ?: System.currentTimeMillis().toString()
+        if (!beginImport(importId)) {
             result.error("already_importing", "Another folder is still importing", null)
             return
         }
         val tree = DocumentFile.fromTreeUri(this, Uri.parse(uriString))
         if (tree == null) {
+            clearImport(importId)
             result.error("bad_uri", "Could not open that folder", null)
             return
         }
         val dest = File(destPath)
         if (!dest.exists() && !dest.mkdirs()) {
+            clearImport(importId)
             result.error("mkdir_failed", "Could not create ${dest.absolutePath}", null)
             return
         }
-
-        val importId = call.argument<String>("importId")
-            ?: System.currentTimeMillis().toString()
-        synchronized(this) { activeImportId = importId }
 
         // Listing and copying a few thousand SAF documents is far too slow for
         // the main thread. One thread owns the whole import; progress is sent
@@ -346,21 +402,157 @@ class MainActivity : FlutterActivity() {
         for (child in children) {
             if (!isActive(importId)) return
             if (child.isDirectory) {
-                val name = safeName(child.name)
+                val name = safeDirName(child.name)
                 val childRel = if (rel.isEmpty()) name else "$rel/$name"
                 collect(child, childRel, out, importId)
                 continue
             }
             val raw = child.name ?: continue
             val dot = raw.lastIndexOf('.')
-            if (dot <= 0) continue
-            if (raw.substring(dot + 1).lowercase() !in MEDIA_EXTENSIONS) continue
+            val type = child.type ?: ""
+            val hasMime = MEDIA_MIMES.any { type.startsWith(it) }
+            if (dot <= 0 && !hasMime) continue
+            if (dot > 0 &&
+                raw.substring(dot + 1).lowercase() !in MEDIA_EXTENSIONS &&
+                !hasMime
+            ) {
+                continue
+            }
             val size = try {
                 child.length()
             } catch (_: Exception) {
                 -1L
             }
-            out.add(Source(child, rel, safeName(raw), size))
+            out.add(
+                Source(
+                    doc = child,
+                    relDir = rel,
+                    name = safeName(raw),
+                    size = size,
+                    modified = try {
+                        child.lastModified()
+                    } catch (_: Exception) {
+                        -1L
+                    },
+                ),
+            )
+        }
+    }
+
+    /// Imports exported JSON documents from an SAF tree. Re-picking a folder
+    /// refreshes the app-private copy; the user's original files are untouched.
+    private fun importJsonFolder(call: MethodCall, result: MethodChannel.Result) {
+        val uriString = call.argument<String>("uri")
+        val destPath = call.argument<String>("destDir")
+        if (uriString == null || destPath == null) {
+            result.error("invalid_args", "uri and destDir are required", null)
+            return
+        }
+        val importId = call.argument<String>("importId")
+            ?: System.currentTimeMillis().toString()
+        if (!beginImport(importId)) {
+            result.error("already_importing", "Another folder is still importing", null)
+            return
+        }
+        val tree = DocumentFile.fromTreeUri(this, Uri.parse(uriString))
+        if (tree == null) {
+            clearImport(importId)
+            result.error("bad_uri", "Could not open that folder", null)
+            return
+        }
+        val dest = File(destPath)
+        if (!dest.exists() && !dest.mkdirs()) {
+            clearImport(importId)
+            result.error("mkdir_failed", "Could not create ${dest.absolutePath}", null)
+            return
+        }
+
+        Thread {
+            val copied = intArrayOf(0)
+            val skipped = intArrayOf(0)
+            val buffer = ByteArray(BUFFER_SIZE)
+            try {
+                val sources = mutableListOf<Source>()
+                collectJson(tree, "", sources, importId)
+                val used = HashMap<String, MutableSet<String>>()
+                val paths = mutableListOf<String>()
+                for (source in sources) {
+                    if (!isActive(importId)) break
+                    try {
+                        val path = copyOne(
+                            source,
+                            dest,
+                            used,
+                            buffer,
+                            skipped,
+                            copied,
+                            overwrite = true,
+                        )
+                        if (path != null) paths.add(path)
+                    } catch (_: Exception) {
+                        skipped[0]++
+                    }
+                }
+                val cancelled = !isActive(importId)
+                clearImport(importId)
+                Handler(Looper.getMainLooper()).post {
+                    result.success(
+                        mapOf(
+                            "path" to dest.absolutePath,
+                            "paths" to paths,
+                            "copied" to copied[0],
+                            "skipped" to skipped[0],
+                            "cancelled" to cancelled,
+                        ),
+                    )
+                }
+            } catch (e: Exception) {
+                clearImport(importId)
+                Handler(Looper.getMainLooper()).post {
+                    result.error("import_failed", e.toString(), null)
+                }
+            }
+        }.start()
+    }
+
+    private fun collectJson(
+        doc: DocumentFile,
+        rel: String,
+        out: MutableList<Source>,
+        importId: String,
+    ) {
+        if (!isActive(importId)) return
+        for (child in doc.listFiles() ?: return) {
+            if (!isActive(importId)) return
+            if (child.isDirectory) {
+                val name = safeDirName(child.name)
+                val childRel = if (rel.isEmpty()) name else "$rel/$name"
+                collectJson(child, childRel, out, importId)
+                continue
+            }
+            val raw = child.name ?: continue
+            val jsonName = raw.lowercase().endsWith(".json") ||
+                child.type == "application/json" ||
+                (child.type ?: "").endsWith("+json")
+            if (!jsonName) continue
+            val size = try {
+                child.length()
+            } catch (_: Exception) {
+                -1L
+            }
+            out.add(
+                Source(
+                    doc = child,
+                    relDir = rel,
+                    name = safeName(raw),
+                    size = size,
+                    modified = try {
+                        child.lastModified()
+                    } catch (_: Exception) {
+                        -1L
+                    },
+                ),
+            )
         }
     }
 
@@ -371,19 +563,21 @@ class MainActivity : FlutterActivity() {
         buffer: ByteArray,
         skipped: IntArray,
         copied: IntArray,
-    ) {
+        overwrite: Boolean = false,
+    ): String? {
         val parent = if (source.relDir.isEmpty()) dest else File(dest, source.relDir)
         if (!parent.exists() && !parent.mkdirs()) {
             skipped[0]++
-            return
+            return null
         }
 
         // Sanitizing can make two different names identical. Give each source
-        // a unique lowercased name in its destination folder.
+        // a unique name in its destination folder. Lowercasing here would
+        // merge files that differ only by case on case-sensitive storage.
         val names = used.getOrPut(parent.path) { HashSet() }
         var name = source.name
         var suffix = 1
-        while (!names.add(name.lowercase())) {
+        while (!names.add(name)) {
             val dot = source.name.lastIndexOf('.')
             val base = if (dot > 0) source.name.substring(0, dot) else source.name
             val ext = if (dot > 0) source.name.substring(dot) else ""
@@ -392,17 +586,23 @@ class MainActivity : FlutterActivity() {
         }
 
         val target = File(parent, name)
-        // Length is only a cheap hint: equal size with unknown source size is
-        // never treated as "already there".
-        if (source.size > 0 && target.exists() && target.length() == source.size) {
+        // Size alone is not identity: an edited file of the same length must
+        // replace the old copy. Unknown source modified times force a copy.
+        if (!overwrite &&
+            source.size > 0 &&
+            source.modified > 0 &&
+            target.exists() &&
+            target.length() == source.size &&
+            target.lastModified() == source.modified
+        ) {
             skipped[0]++
-            return
+            return target.absolutePath
         }
 
         val input = contentResolver.openInputStream(source.doc.uri)
         if (input == null) {
             skipped[0]++
-            return
+            return null
         }
         // Write to a temporary file so a killed/ interrupted import can never
         // leave a truncated file that looks complete on the next run.
@@ -413,12 +613,18 @@ class MainActivity : FlutterActivity() {
             part.delete()
             throw e
         }
+        if (target.exists() && !target.delete()) {
+            part.delete()
+            skipped[0]++
+            return null
+        }
         if (!part.renameTo(target)) {
             part.delete()
             skipped[0]++
-            return
+            return null
         }
         copied[0]++
+        return target.absolutePath
     }
 
     private fun copyStream(input: InputStream, target: File, buffer: ByteArray) {
@@ -434,5 +640,17 @@ class MainActivity : FlutterActivity() {
     private fun safeName(name: String?): String {
         val cleaned = name?.trim()?.replace(INVALID_NAME, "_")
         return if (cleaned.isNullOrEmpty()) "media" else cleaned
+    }
+
+    /// Sanitizing directory names can merge distinct source folders. Keep the
+    /// original name's hash so `Photos` and `Photos?` remain separate.
+    private fun safeDirName(name: String?): String {
+        val cleaned = safeName(name)
+        val original = name?.trim().orEmpty()
+        return if (cleaned == original) {
+            cleaned
+        } else {
+            "$cleaned-${Integer.toHexString(original.hashCode())}"
+        }
     }
 }

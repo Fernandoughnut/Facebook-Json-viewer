@@ -24,10 +24,14 @@ class _GlobalSearchScreenState extends State<GlobalSearchScreen> {
   bool mediaOnly = false;
   List<GlobalHit> hits = [];
   bool truncated = false;
+  late int _dataRevision;
+  late int _settingsRevision;
 
   @override
   void initState() {
     super.initState();
+    _dataRevision = widget.store.dataRevision;
+    _settingsRevision = widget.store.settings.revision;
     widget.store.addListener(_onStoreChanged);
     _search();
   }
@@ -42,6 +46,11 @@ class _GlobalSearchScreenState extends State<GlobalSearchScreen> {
   }
 
   void _onStoreChanged() {
+    final data = widget.store.dataRevision;
+    final settings = widget.store.settings.revision;
+    if (data == _dataRevision && settings == _settingsRevision) return;
+    _dataRevision = data;
+    _settingsRevision = settings;
     if (mounted) setState(_search);
   }
 

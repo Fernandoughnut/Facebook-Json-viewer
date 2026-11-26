@@ -1,14 +1,15 @@
 // Indexed: opens exported Facebook / Messenger JSON and shows it as chats.
-// Linux first; the same code is meant to run on Android.
+// The same app runs on Linux and Android.
 
 import 'dart:async' show unawaited;
-import 'dart:io' show File;
+import 'dart:io' show File, Platform;
 import 'dart:ui' show PlatformDispatcher;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 
+import 'android_folder.dart';
 import 'chat_view.dart';
 import 'command_palette.dart';
 import 'global_search_screen.dart';
@@ -611,12 +612,27 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> pickJson() async {
     // file_picker 13+: static call, returns an empty list when cancelled.
-    final files = await FilePicker.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['json'],
-    );
+    // Some Android providers ignore allowedExtensions, so filter again here.
+    final files = Platform.isAndroid
+        ? await FilePicker.pickFiles(type: FileType.any)
+        : await FilePicker.pickFiles(
+            type: FileType.custom,
+            allowedExtensions: ['json'],
+          );
     if (files.isEmpty) return;
-    final paths = files.map((f) => f.path).whereType<String>().toList();
+    final paths = files
+        .map((f) => f.path)
+        .whereType<String>()
+        .where((p) => p.toLowerCase().endsWith('.json'))
+        .toList();
+    if (paths.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No .json files were selected.')),
+        );
+      }
+      return;
+    }
     widget.settings.logBreadcrumb(
       'Open JSON: ${paths.length} file(s), keepRaw=${widget.settings.keepRaw}',
     );
@@ -628,18 +644,47 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> importJsonFolder() async {
-    final uri = await FilePicker.pickDirectory();
-    if (uri == null || uri.scheme != 'file') {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Choose a local folder to import its .json files.'),
-          ),
-        );
+    List<String> files;
+    if (Platform.isAndroid) {
+      // SAF tree URIs cannot be opened with dart:io. The native bridge copies
+      // the JSON files into app-private storage, then Dart imports those paths.
+      final uri = await AndroidFolderPicker.pick();
+      if (uri == null) return;
+      final dest =
+          '${widget.settings.importDir}/json/${AndroidFolderPicker.folderNameFor(uri)}';
+      final result = await AndroidFolderPicker.importJson(uri, dest);
+      final error = result['error'] as String?;
+      if (error != null || !mounted) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Folder import failed: $error')),
+          );
+        }
+        return;
       }
-      return;
+      if (result['cancelled'] == true) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Folder import cancelled.')),
+          );
+        }
+        return;
+      }
+      files = (result['paths'] as List?)?.whereType<String>().toList() ?? [];
+    } else {
+      final uri = await FilePicker.pickDirectory();
+      if (uri == null || uri.scheme != 'file') {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Choose a local folder to import its .json files.'),
+            ),
+          );
+        }
+        return;
+      }
+      files = jsonFilesIn(uri.toFilePath());
     }
-    final files = jsonFilesIn(uri.toFilePath());
     if (files.isEmpty) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -652,7 +697,12 @@ class _HomeScreenState extends State<HomeScreen> {
       'Import folder: ${files.length} file(s), keepRaw=${widget.settings.keepRaw}',
     );
     await _offerLighterMemoryForLargeFiles(files);
-    await store.addJsonFiles(files, reviveRemoved: true);
+    await store.addJsonFiles(
+      files,
+      reviveRemoved: true,
+      // The SAF bridge already copied these into durable app-private storage.
+      persist: !Platform.isAndroid,
+    );
     if (mounted && selected == null && store.chats.length == 1) {
       setState(() => selected = store.chats.values.first);
     }

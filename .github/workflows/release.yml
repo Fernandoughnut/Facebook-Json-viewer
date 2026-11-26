@@ -1,4 +1,4 @@
-name: Linux release
+name: Indexed release
 
 on:
   push:
@@ -15,6 +15,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Set up Java for Android builds
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
@@ -35,9 +41,10 @@ jobs:
             libsecret-1-dev \
             xz-utils
 
-      - name: Enable Linux desktop and fetch packages
+      - name: Enable desktop and fetch packages
         run: |
           flutter config --enable-linux-desktop
+          flutter doctor -v || true
           flutter pub get
 
       - name: Verify
@@ -66,6 +73,9 @@ jobs:
           sha256sum "$ARCHIVE" > "${ARCHIVE}.sha256"
           echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
 
+      - name: Build Android sideload APKs
+        run: ./tool/build_android.sh "${{ runner.temp }}/indexed-android"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -76,3 +86,5 @@ jobs:
           files: |
             ${{ env.ARCHIVE }}
             ${{ env.ARCHIVE }}.sha256
+            ${{ runner.temp }}/indexed-android/*.apk
+            ${{ runner.temp }}/indexed-android/*.apk.sha256

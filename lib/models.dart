@@ -57,8 +57,14 @@ class Msg {
   /// The message this one replies to, once found in the conversation (set after loading).
   Msg? replyTarget;
 
-  /// Lower-case text, made the first time you search (keeps big chats light until then).
+  /// Lower-case search fields, made on first use so a 20k-message export does
+  /// not allocate several extra strings while parsing.
   late final String lower = text.toLowerCase();
+  late final String lowerSender = sender.toLowerCase();
+  late final String lowerShare = share.toLowerCase();
+  late final List<String> lowerMediaNames = [
+    for (final x in media) x.name.toLowerCase(),
+  ];
 
   Msg({
     required this.id,
@@ -95,6 +101,35 @@ class MediaDir {
 
   MediaDir(this.path, this.files, [Map<String, String>? paths])
     : paths = paths ?? const <String, String>{};
+
+  Map<String, List<String>>? _suffixes;
+
+  /// Relative-path tails -> candidate paths, built once per folder.
+  ///
+  /// A URI from an exported conversation can carry extra leading folders (for
+  /// example `media/photos/a.jpg` after unpacking a media pack). Looking up
+  /// the tail in a prebuilt index avoids scanning every indexed file for every
+  /// media reference. Candidates keep the old shortest-key-first ordering so
+  /// a vanished file can still fall through to the next match.
+  Map<String, List<String>> get suffixes {
+    final existing = _suffixes;
+    if (existing != null) return existing;
+    final entries = paths.entries.toList()
+      ..sort((a, b) {
+        final byLength = a.key.length.compareTo(b.key.length);
+        return byLength != 0 ? byLength : a.key.compareTo(b.key);
+      });
+    final built = <String, List<String>>{};
+    for (final entry in entries) {
+      final parts = entry.key.split('/');
+      for (var i = 0; i < parts.length; i++) {
+        built
+            .putIfAbsent(parts.sublist(i).join('/'), () => <String>[])
+            .add(entry.value);
+      }
+    }
+    return _suffixes = built;
+  }
 
   int get count => files.length;
 }
