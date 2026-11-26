@@ -40,6 +40,10 @@ Planned next:
 - Overlapping imports still dedupe correctly after the compact index change.
 - Only the position bar's pill itself is hit-testable now. Touching the empty
   track no longer jumps immediately or steals Android gesture Back swipes.
+- Immersive mode's overlay bar now appears reliably on fast flings, even when
+  Flutter coalesces scroll notifications.
+- A temporarily expanded immersive header collapses on scroll regardless of the
+  general auto-hide setting, and Settings search now finds Immersive mode.
 
 ## [1.3.0] - 2026-11-26
 

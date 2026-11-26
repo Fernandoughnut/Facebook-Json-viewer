@@ -389,8 +389,8 @@ class _ChatViewState extends State<ChatView> {
   final ValueNotifier<bool> _immersiveBarVisible = ValueNotifier(false);
   bool _immersiveHeaderExpanded = false;
   Timer? _immersiveBarTimer;
-  double? _lastFastPixels;
-  int? _lastFastAt;
+  static const _fastScrollWindow = Duration(milliseconds: 200);
+  final List<({int t, double px})> _scrollSamples = [];
 
   double? _lastScrollPixels;
   int _ignoreScrollUntil = 0;
@@ -756,14 +756,36 @@ class _ChatViewState extends State<ChatView> {
     if (!settings.immersiveMode) return;
     _immersiveBarVisible.value = true;
     _immersiveBarTimer?.cancel();
-    _immersiveBarTimer = Timer(const Duration(milliseconds: 1200), () {
+    _immersiveBarTimer = Timer(const Duration(milliseconds: 1500), () {
       if (mounted) _immersiveBarVisible.value = false;
     });
+  }
+
+  /// Compare against a short window instead of just the previous frame. Fling
+  /// notifications can be sparse, and a single huge jump must not be missed.
+  void _trackFastScroll(int now, double pixels) {
+    if (!settings.immersiveMode) {
+      _scrollSamples.clear();
+      return;
+    }
+    _scrollSamples.add((t: now, px: pixels));
+    while (_scrollSamples.length > 1 &&
+        now - _scrollSamples.first.t > _fastScrollWindow.inMilliseconds) {
+      _scrollSamples.removeAt(0);
+    }
+    final first = _scrollSamples.first;
+    final elapsed = now - first.t;
+    if (_scrollSamples.length > 1 &&
+        elapsed > 0 &&
+        isFastScroll(pixels - first.px, elapsed)) {
+      _flashImmersiveBar();
+    }
   }
 
   void toggleImmersive() {
     settings.update(() => settings.immersiveMode = !settings.immersiveMode);
     _immersiveHeaderExpanded = false;
+    _scrollSamples.clear();
     _immersiveBarTimer?.cancel();
     _immersiveBarVisible.value = false;
     if (settings.immersiveMode && mounted) {
@@ -785,30 +807,33 @@ class _ChatViewState extends State<ChatView> {
     final now = DateTime.now().millisecondsSinceEpoch;
     final pixels = n.metrics.pixels;
 
-    if (settings.immersiveMode && n is ScrollUpdateNotification) {
-      final prev = _lastFastPixels;
-      final prevAt = _lastFastAt;
-      if (prev != null && prevAt != null) {
-        if (isFastScroll(pixels - prev, now - prevAt)) _flashImmersiveBar();
-      }
-      _lastFastPixels = pixels;
-      _lastFastAt = now;
+    if (n is ScrollUpdateNotification) {
+      _trackFastScroll(now, pixels);
     } else {
-      _lastFastPixels = null;
-      _lastFastAt = null;
+      _scrollSamples.clear();
+    }
+
+    final prev = _lastScrollPixels;
+    _lastScrollPixels = pixels;
+
+    // Immersive's temporarily expanded header collapses on any real scroll,
+    // even when the general auto-hide preference is off.
+    if (settings.immersiveMode &&
+        _immersiveHeaderExpanded &&
+        query.isEmpty &&
+        !searchFocus.hasFocus &&
+        !selecting &&
+        prev != null &&
+        (pixels - prev).abs() > 2) {
+      setState(() => _immersiveHeaderExpanded = false);
     }
 
     if (!settings.autoHideTopBar) return false;
     // The query and selection controls live in the header. Never collapse it
     // while the reader is using them.
     if (query.isNotEmpty || searchFocus.hasFocus || selecting) return false;
-    final prev = _lastScrollPixels;
-    _lastScrollPixels = pixels;
     if (now < _ignoreScrollUntil || prev == null) return false;
     final delta = pixels - prev;
-    if (settings.immersiveMode && _immersiveHeaderExpanded && delta > 2) {
-      setState(() => _immersiveHeaderExpanded = false);
-    }
     if (pixels <= 96) {
       if (_topBarHidden.value) _topBarHidden.value = false;
     } else if (delta > 2) {

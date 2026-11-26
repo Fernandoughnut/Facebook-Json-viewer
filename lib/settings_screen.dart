@@ -619,7 +619,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       section(
         context,
         'Search results panel',
-        'search results layout compact detailed newest activity rail minimap position bar scrollbar',
+        'search results layout compact detailed newest activity rail minimap position bar scrollbar immersive fast scroll compact header eye people filter',
       ),
       const Text('Layout'),
       const SizedBox(height: 8),
