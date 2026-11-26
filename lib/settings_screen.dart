@@ -659,7 +659,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         contentPadding: EdgeInsets.zero,
         title: const Text('Show position bar in chats'),
         subtitle: const Text(
-          'The thin bar at the far right for jumping through a long conversation by message index. Can also be toggled in the chat menu.',
+          'The thin bar inset from the right edge for jumping through a long conversation by message index. It ignores horizontal edge swipes so gesture Back still works. Can also be toggled in the chat menu.',
         ),
         value: settings.showIndexScrollbar,
         onChanged: (v) =>

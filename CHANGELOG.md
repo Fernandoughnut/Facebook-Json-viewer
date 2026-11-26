@@ -30,6 +30,9 @@ Planned next:
 ### Fixed
 
 - Overlapping imports still dedupe correctly after the compact index change.
+- The chat position bar is thinner, inset from the screen edge, and responds
+  only to vertical drags/taps, so Android gesture Back no longer gets swallowed
+  by a horizontal swipe near the right edge.
 
 ## [1.3.0] - 2026-11-26
 

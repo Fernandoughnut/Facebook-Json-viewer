@@ -222,45 +222,56 @@ class _IndexScrollbarState extends State<_IndexScrollbar> {
                   ? 0.0
                   : (position / maxTop).clamp(0.0, 1.0);
               final thumbTop = progress * math.max(0.0, height - thumbHeight);
-              return GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTapDown: (d) =>
-                    _drag(d.localPosition.dy, height, thumbHeight),
-                onTapUp: (_) => _endDrag(),
-                onPanStart: (d) =>
-                    _drag(d.localPosition.dy, height, thumbHeight),
-                onPanUpdate: (d) =>
-                    _drag(d.localPosition.dy, height, thumbHeight),
-                onPanEnd: (_) => _endDrag(),
-                onPanCancel: _endDrag,
-                child: Container(
-                  width: 14,
-                  margin: const EdgeInsets.symmetric(vertical: 4),
-                  child: Stack(
-                    children: [
-                      Positioned.fill(
-                        child: Container(
-                          width: 4,
-                          margin: const EdgeInsets.symmetric(horizontal: 5),
-                          decoration: BoxDecoration(
-                            color: cs.surfaceContainerHighest,
-                            borderRadius: BorderRadius.circular(2),
+              // Keep the strip away from the physical edge so Android's
+              // gesture-navigation back swipe has room to start. Only vertical
+              // drags and completed taps are handled here; horizontal swipes
+              // are left to the ancestor/system.
+              return Padding(
+                padding: const EdgeInsets.only(right: 12),
+                child: GestureDetector(
+                  behavior: HitTestBehavior.translucent,
+                  onTapUp: (d) {
+                    _drag(d.localPosition.dy, height, thumbHeight);
+                    _endDrag();
+                  },
+                  onVerticalDragStart: (d) =>
+                      _drag(d.localPosition.dy, height, thumbHeight),
+                  onVerticalDragUpdate: (d) =>
+                      _drag(d.localPosition.dy, height, thumbHeight),
+                  onVerticalDragEnd: (_) => _endDrag(),
+                  onVerticalDragCancel: _endDrag,
+                  child: Container(
+                    width: 14,
+                    margin: const EdgeInsets.symmetric(vertical: 4),
+                    child: Stack(
+                      children: [
+                        Positioned.fill(
+                          child: Center(
+                            child: Container(
+                              width: 3,
+                              decoration: BoxDecoration(
+                                color: cs.outlineVariant.withValues(
+                                  alpha: 0.55,
+                                ),
+                                borderRadius: BorderRadius.circular(2),
+                              ),
+                            ),
                           ),
                         ),
-                      ),
-                      Positioned(
-                        top: thumbTop,
-                        height: thumbHeight,
-                        left: 3,
-                        right: 3,
-                        child: Container(
-                          decoration: BoxDecoration(
-                            color: cs.onSurface.withValues(alpha: 0.32),
-                            borderRadius: BorderRadius.circular(4),
+                        Positioned(
+                          top: thumbTop,
+                          height: thumbHeight,
+                          left: 4,
+                          right: 4,
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: cs.onSurface.withValues(alpha: 0.28),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
                           ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
               );
