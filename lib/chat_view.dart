@@ -10,6 +10,7 @@ import 'package:flutter/services.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
 import 'exporter.dart';
+import 'media_pack.dart';
 import 'models.dart';
 import 'settings.dart';
 import 'store.dart';
@@ -54,6 +55,7 @@ enum _ChatMenuAction {
   jumpToDate,
   select,
   export,
+  packMedia,
 }
 
 class ActivityBucket {
@@ -1605,6 +1607,8 @@ class _ChatViewState extends State<ChatView> {
         });
       case _ChatMenuAction.export:
         chooseExport();
+      case _ChatMenuAction.packMedia:
+        unawaited(packConversationMedia(context, widget.store, widget.chat));
     }
   }
 
@@ -1796,6 +1800,11 @@ class _ChatViewState extends State<ChatView> {
           Icons.file_download_outlined,
           'Export…',
           () => handleMenu(_ChatMenuAction.export),
+        ),
+        _menuAction(
+          Icons.folder_zip_outlined,
+          'Pack media (ZIP)…',
+          () => handleMenu(_ChatMenuAction.packMedia),
         ),
       ],
       child: IconButton(
@@ -2928,6 +2937,16 @@ class _ChatViewState extends State<ChatView> {
             ],
           ),
         ),
+        const PopupMenuItem<Object>(
+          value: _ChatMenuAction.packMedia,
+          child: Row(
+            children: [
+              Icon(Icons.folder_zip_outlined, size: 18),
+              SizedBox(width: 12),
+              Text('Pack media (ZIP)…'),
+            ],
+          ),
+        ),
       ],
     );
     final overflowMenu = settings.material3
@@ -3353,8 +3372,8 @@ class _ChatViewState extends State<ChatView> {
           child: Image.file(
             File(pics[i].path),
             fit: BoxFit.cover,
-            cacheWidth: (tile * 2).round(), // decode small: light on memory
-            filterQuality: FilterQuality.low,
+            cacheWidth: (tile * MediaQuery.devicePixelRatioOf(context)).round(),
+            filterQuality: FilterQuality.medium,
             gaplessPlayback: true,
             errorBuilder: (_, _, _) => const Icon(Icons.broken_image),
           ),

@@ -46,9 +46,11 @@ Built with Flutter. Linux works today; Android builds should work with the file-
 ### Media
 
 - Photos shown inline, a full-screen photo viewer (zoom, arrow keys, caption with sender and date) and a gallery grid.
+- Imported media is never re-encoded: the original bytes are copied as-is. Inline photos and gallery tiles decode at your screen's real pixel density, and the full-screen viewer decodes the original so zooming does not reveal a soft, compressed copy.
 - Photos are matched to messages by the file name written in the JSON. The exported files have random names like `0a9ad60f-e5cc-….jpeg`, so you never need to rename anything.
 - Media folders: a **shared** folder that serves every conversation, and/or folders for **one conversation** only (checked first, then the shared ones).
-- Media info dialog per conversation: how many files are referenced, how many were found (and in which kind of folder), and the names of the missing ones.
+- Media info dialog per conversation: how many files are referenced, how many were found (and in which kind of folder), and the names of the missing ones. It can also pack that conversation's media directly.
+- **Pack media (ZIP)** in the chat ⋮ menu (or the media info dialog) collects only the files that conversation actually references. A folder with 300 images but 40 referenced files produces a 40-file ZIP, not a copy of the whole folder. Files are stored (not recompressed) with readable `date_sender_originalname` names; a `manifest.json` maps every hashed export URI to its packed file, and `conversation.json` is included for context. Duplicate references to the same file are packed once, and missing files are listed in the manifest. The ZIP is streamed to a folder you choose on both Linux and Android.
 - On Android, the media button opens the system folder picker. Because a `content://` tree cannot be read with `dart:io`, Indexed streams the folder's photos and videos into app-private storage first, with a live progress/cancel dialog, then indexes that copy. Re-picking the same folder reuses the files already copied.
 
 ### Export and performance
@@ -173,6 +175,7 @@ dart run tool/generate_large_export.dart 100000 /tmp/opencode/large_export.json
 | `lib/store.dart` | App state: conversations, dedupe, reply links, global search, media lookup, duplicate detection |
 | `lib/util.dart` | Shared helpers: dates, search matching, folder picker, Android media fallback |
 | `lib/exporter.dart` | JSON / CSV / text export and clean export schema |
+| `lib/media_pack.dart` | Conversation-scoped media ZIP planner, streaming ZIP builder and SAF save bridge |
 | `lib/global_search_screen.dart` | Cross-conversation search screen |
 | `lib/tools_screen.dart` | Bookmarks, insights, links and media tools |
 | `test/` | Parser, cache, export and sample-export regression tests |
@@ -185,7 +188,7 @@ dart run tool/generate_large_export.dart 100000 /tmp/opencode/large_export.json
 - Videos and voice clips open in the default player on Linux only.
 - HEIC photos cannot be displayed.
 - Desktop drag-and-drop of files onto the window is not implemented; use **Open JSON** or the folder-import button. Bulk import and multi-file selection are supported.
-- Very large photo collections are decoded at reduced size and cached in memory, but there is no disk thumbnail cache yet.
+- Inline photos and gallery tiles still decode at screen pixel size to keep very large chats light; the full-screen viewer uses the original image. There is no disk thumbnail cache yet.
 - Reply display depends on the export. The parser looks for common field names (`reply_to`, `replyTo`, `quoted_message`, …) and for message IDs. If replies do not show, open "Message details" and look at its fields; the field names there tell us what to add to `replyKeys` in `parser.dart`.
 - Format detection is heuristic. If some text or a sender looks wrong, the export probably uses field names the parser does not know yet. Check the structure of your JSON and extend the key lists at the top of `parser.dart`.
 - The PIN gate is not encryption. Anyone with access to the JSON files can still read them directly; the gate can be removed from the lock screen or Settings with confirmation.

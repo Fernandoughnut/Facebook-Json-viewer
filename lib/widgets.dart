@@ -7,6 +7,7 @@ import 'dart:math' as math;
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 
+import 'media_pack.dart';
 import 'models.dart';
 import 'settings.dart';
 import 'store.dart';
@@ -297,6 +298,13 @@ Future<void> showMediaInfo(BuildContext context, Store store, Chat chat) {
             ),
           ),
           actions: [
+            FilledButton.icon(
+              onPressed: (st.fromChat + st.fromShared) == 0
+                  ? null
+                  : () => packConversationMedia(ctx, store, chat),
+              icon: const Icon(Icons.folder_zip_outlined, size: 18),
+              label: const Text('Pack media (ZIP)'),
+            ),
             TextButton(
               onPressed: () => Navigator.pop(ctx),
               child: const Text('Close'),
@@ -463,10 +471,12 @@ class Bubble extends StatelessWidget {
                 child: Image.file(
                   File(p),
                   width: w,
-                  cacheWidth: (w * 2)
-                      .round(), // decode small: keeps big chats light on memory
+                  // Decode at the screen's real pixel density. A fixed 2x
+                  // made photos visibly soft on 3x/4x phones.
+                  cacheWidth: (w * MediaQuery.devicePixelRatioOf(context))
+                      .round(),
                   fit: BoxFit.contain,
-                  filterQuality: FilterQuality.low,
+                  filterQuality: FilterQuality.medium,
                   gaplessPlayback: true,
                   // a fixed-size placeholder until the picture is ready, so the list does not jump around
                   frameBuilder: (context, child, frame, sync) {
@@ -824,10 +834,14 @@ class _PicPagerState extends State<PicPager> {
                     child: InteractiveViewer(
                       maxScale: 6,
                       child: Center(
+                        // Decode the original: this is the view where a user
+                        // checks photo quality and zooms in, so a logical-pixel
+                        // cacheWidth made every imported image look compressed.
                         child: Image.file(
                           File(p.path),
                           fit: BoxFit.contain,
-                          cacheWidth: MediaQuery.sizeOf(context).width.ceil(),
+                          filterQuality: FilterQuality.high,
+                          gaplessPlayback: true,
                         ),
                       ),
                     ),

@@ -10,13 +10,16 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.InputStream
 
 class MainActivity : FlutterActivity() {
     companion object {
         private const val CHANNEL = "dev.local.indexed/folder"
+        private const val EXPORT_CHANNEL = "dev.local.indexed/export"
         private const val REQUEST_PICK_FOLDER = 4242
+        private const val REQUEST_PICK_EXPORT_FOLDER = 4243
         private const val BUFFER_SIZE = 256 * 1024
         private val MEDIA_EXTENSIONS = setOf(
             "jpg", "jpeg", "png", "gif", "webp", "bmp",
@@ -34,7 +37,9 @@ class MainActivity : FlutterActivity() {
     )
 
     private var folderChannel: MethodChannel? = null
+    private var exportChannel: MethodChannel? = null
     private var pendingFolderResult: MethodChannel.Result? = null
+    private var pendingExportFolderResult: MethodChannel.Result? = null
     private var activeImportId: String? = null
 
     private fun isActive(id: String) = synchronized(this) { activeImportId == id }
@@ -55,6 +60,16 @@ class MainActivity : FlutterActivity() {
                     activeImportId = null
                     result.success(null)
                 }
+                else -> result.notImplemented()
+            }
+        }
+
+        val export = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, EXPORT_CHANNEL)
+        exportChannel = export
+        export.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "pickExportFolder" -> pickExportFolder(result)
+                "writeFileToFolder" -> writeFileToFolder(call, result)
                 else -> result.notImplemented()
             }
         }
@@ -80,6 +95,27 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    private fun pickExportFolder(result: MethodChannel.Result) {
+        val previous = pendingExportFolderResult
+        pendingExportFolderResult = result
+        if (previous != null) {
+            previous.error("in_progress", "A folder pick is already open", null)
+        }
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+            flags = flags or
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+                Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or
+                Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
+        }
+        try {
+            startActivityForResult(intent, REQUEST_PICK_EXPORT_FOLDER)
+        } catch (e: Exception) {
+            pendingExportFolderResult = null
+            result.error("no_file_manager", e.toString(), null)
+        }
+    }
+
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         if (requestCode == REQUEST_PICK_FOLDER) {
             val result = pendingFolderResult
@@ -101,7 +137,111 @@ class MainActivity : FlutterActivity() {
             }
             return
         }
+        if (requestCode == REQUEST_PICK_EXPORT_FOLDER) {
+            val result = pendingExportFolderResult
+            pendingExportFolderResult = null
+            if (resultCode != RESULT_OK || data?.data == null) {
+                result?.success(null)
+            } else {
+                val uri = data.data!!
+                try {
+                    contentResolver.takePersistableUriPermission(
+                        uri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                            Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+                    )
+                } catch (_: SecurityException) {
+                    // Some providers refuse persistence; the write below still
+                    // works while this process is alive.
+                }
+                result?.success(uri.toString())
+            }
+            return
+        }
         super.onActivityResult(requestCode, resultCode, data)
+    }
+
+    private fun writeFileToFolder(call: MethodCall, result: MethodChannel.Result) {
+        val uriString = call.argument<String>("uri")
+        val sourcePath = call.argument<String>("sourcePath")
+        val fileName = call.argument<String>("fileName")
+        val exportId = call.argument<String>("exportId")
+        if (uriString == null || sourcePath == null || fileName == null || exportId == null) {
+            result.error("invalid_args", "uri, sourcePath and fileName are required", null)
+            return
+        }
+        val tree = DocumentFile.fromTreeUri(this, Uri.parse(uriString))
+        if (tree == null || !tree.canWrite()) {
+            result.error("bad_folder", "That folder is not writable", null)
+            return
+        }
+        val source = File(sourcePath)
+        if (!source.exists()) {
+            result.error("missing_source", "The archive could not be read", null)
+            return
+        }
+
+        Thread {
+            try {
+                val name = safeName(fileName)
+                val target = tree.findFile(name)
+                    ?: tree.createFile("application/zip", name)
+                    ?: throw IllegalStateException("Could not create $name")
+                val total = source.length()
+                val out = try {
+                    contentResolver.openOutputStream(target.uri, "w")
+                } catch (_: Exception) {
+                    contentResolver.openOutputStream(target.uri)
+                } ?: throw IllegalStateException("Could not open $name for writing")
+
+                val buffer = ByteArray(BUFFER_SIZE)
+                var done = 0L
+                var lastEmit = 0L
+                fun emit(final: Boolean = false) {
+                    val now = System.currentTimeMillis()
+                    if (!final && now - lastEmit < 150) return
+                    lastEmit = now
+                    try {
+                        exportChannel?.invokeMethod(
+                            "exportProgress",
+                            mapOf(
+                                "exportId" to exportId,
+                                "current" to done,
+                                "total" to total,
+                            ),
+                        )
+                    } catch (_: Exception) {
+                        // Progress frames must never fail an export.
+                    }
+                }
+
+                FileInputStream(source).use { input ->
+                    out.use { output ->
+                        while (true) {
+                            val read = input.read(buffer)
+                            if (read <= 0) break
+                            output.write(buffer, 0, read)
+                            done += read.toLong()
+                            emit()
+                        }
+                        output.flush()
+                    }
+                }
+                emit(final = true)
+                Handler(Looper.getMainLooper()).post {
+                    result.success(
+                        mapOf(
+                            "uri" to target.uri.toString(),
+                            "name" to (target.name ?: name),
+                        ),
+                    )
+                }
+            } catch (e: Exception) {
+                Handler(Looper.getMainLooper()).post {
+                    result.error("export_failed", e.toString(), null)
+                }
+            }
+        }.start()
     }
 
     private fun importFolder(call: MethodCall, result: MethodChannel.Result) {

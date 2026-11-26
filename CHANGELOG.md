@@ -20,6 +20,13 @@ Planned next:
   activity rail is shown, and the overlay position bar appears only after a
   sustained fast scroll. Toggle it from the chat menu or Settings; the choice
   persists across chats and launches.
+- Conversation-scoped **Pack media (ZIP)**: the chat menu and media info dialog
+  now bundle only the files that conversation references. Files keep their
+  original bytes, get readable `date_sender_originalname` names, and ship with
+  `conversation.json` plus a manifest mapping the hashed export URIs to the
+  packed files. Duplicate references are packed once; missing references are
+  recorded in the manifest. Android saves through a native SAF stream, so even
+  large archives do not cross the method channel in memory.
 - Real Indexed launcher artwork: adaptive Android icons (including monochrome)
   and a bundled Linux window icon.
 
@@ -39,6 +46,9 @@ Planned next:
   cache is bounded, and `.part` / `.tmp` files are ignored by media scanning.
 - The "Open conversations at" setting uses a dropdown on narrow screens, so all
   three choices fit without sideways scrolling.
+- Inline photos and gallery tiles decode at the screen's real pixel density,
+  and the full-screen viewer decodes the original image instead of a
+  logical-pixel-width copy. Imported media itself remains byte-for-byte.
 
 ### Fixed
 
@@ -53,6 +63,8 @@ Planned next:
 - The immersive overflow menu no longer closes itself when you scroll inside
   it: floating controls stay pinned until the menu closes.
 - Settings search now finds Immersive mode and the start-position options.
+- Photos no longer look soft on high-density screens because of fixed 2x or
+  logical-pixel decode widths.
 
 ## [1.3.0] - 2026-11-26
 
