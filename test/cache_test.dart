@@ -55,6 +55,29 @@ void main() {
     expect(rebuilt.single.messages.length, 74);
   });
 
+  test('pruning removes stale versions and interrupted writes', () async {
+    final dir = await Directory.systemTemp.createTemp('indexed_cache_test_');
+    addTearDown(() async {
+      if (dir.existsSync()) dir.deleteSync(recursive: true);
+    });
+    final cache = '${dir.path}/cache';
+    Directory(cache).createSync(recursive: true);
+
+    final stale = File('$cache/stale.json')
+      ..writeAsStringSync('{"format":0,"parser":0,"threads":[]}');
+    final partial = File('$cache/orphan.tmp')..writeAsStringSync('partial');
+    final valid = File('$cache/valid.json')
+      ..writeAsStringSync(
+        '{"format":$cacheFormatVersion,"parser":$parserVersion,"threads":[]}',
+      );
+
+    pruneParseCache(cache);
+
+    expect(stale.existsSync(), isFalse);
+    expect(partial.existsSync(), isFalse);
+    expect(valid.existsSync(), isTrue);
+  });
+
   test('cache invalidates when the source file changes', () async {
     final dir = await Directory.systemTemp.createTemp('indexed_cache_test_');
     addTearDown(() async {

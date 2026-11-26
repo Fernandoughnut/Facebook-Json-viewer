@@ -12,6 +12,21 @@ Planned next:
 - Edge-to-edge, back-gesture and touch-layout checks.
 - Replace the placeholder launcher icon with the new Indexed artwork.
 
+### Changed
+
+- Android system Back now returns from an open conversation to the chat list
+  instead of exiting the app.
+- Parse cache files are written incrementally, avoiding a second full copy of
+  every message in memory on large exports.
+- The long-lived import dedupe index stores compact hashes instead of full
+  message text, and only chats that received new messages are re-sorted.
+- Stale and interrupted parse cache files are pruned on startup, the media-stat
+  cache is bounded, and `.part` / `.tmp` files are ignored by media scanning.
+
+### Fixed
+
+- Overlapping imports still dedupe correctly after the compact index change.
+
 ## [1.3.0] - 2026-11-26
 
 ### Added

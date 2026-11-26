@@ -13,6 +13,7 @@ import 'chat_view.dart';
 import 'command_palette.dart';
 import 'global_search_screen.dart';
 import 'models.dart';
+import 'parser.dart';
 import 'settings.dart';
 import 'settings_screen.dart';
 import 'shortcuts.dart';
@@ -24,6 +25,7 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final settings = AppSettings();
   await settings.load();
+  if (settings.useParseCache) pruneParseCache(settings.cacheDir);
   gSettings = settings;
 
   // Write errors to a log file, so a crash can be looked at afterwards.
@@ -1091,92 +1093,106 @@ class _HomeScreenState extends State<HomeScreen> {
             builder: (context, box) {
               final wide = box.maxWidth >= 800;
               _wide = wide;
-              return Scaffold(
-                appBar: wide ? null : AppBar(title: const Text('Indexed')),
-                body: SafeArea(
-                  child: wide
-                      ? Row(
-                          children: [
-                            if (widget.settings.material3) ...[
-                              NavigationRail(
-                                selectedIndex: 0,
-                                groupAlignment: -0.85,
-                                labelType: NavigationRailLabelType.all,
-                                leading: Padding(
-                                  padding: const EdgeInsets.only(bottom: 8),
-                                  child: Icon(
-                                    Icons.forum_outlined,
-                                    size: 28,
-                                    color: Theme.of(context)
-                                        .colorScheme
-                                        .primary,
-                                  ),
-                                ),
-                                onDestinationSelected: (i) {
-                                  switch (i) {
-                                    case 1:
-                                      unawaited(openCommandPalette());
-                                    case 2:
-                                      unawaited(searchAll());
-                                    case 3:
-                                      unawaited(openTools());
-                                    case 4:
-                                      openSettings();
-                                  }
-                                },
-                                destinations: const [
-                                  NavigationRailDestination(
-                                    icon: Icon(Icons.chat_bubble_outline),
-                                    selectedIcon: Icon(Icons.chat_bubble),
-                                    label: Text('Chats'),
-                                  ),
-                                  NavigationRailDestination(
-                                    icon: Icon(Icons.bolt_outlined),
-                                    label: Text('Commands'),
-                                  ),
-                                  NavigationRailDestination(
-                                    icon: Icon(Icons.travel_explore),
-                                    label: Text('Search'),
-                                  ),
-                                  NavigationRailDestination(
-                                    icon: Icon(
-                                      Icons.dashboard_customize_outlined,
+              return PopScope<Object?>(
+                canPop: false,
+                onPopInvokedWithResult: (didPop, result) {
+                  if (didPop) return;
+                  if (selected != null) {
+                    setState(() {
+                      selected = null;
+                      _jumpTarget = null;
+                    });
+                    return;
+                  }
+                  SystemNavigator.pop();
+                },
+                child: Scaffold(
+                  appBar: wide ? null : AppBar(title: const Text('Indexed')),
+                  body: SafeArea(
+                    child: wide
+                        ? Row(
+                            children: [
+                              if (widget.settings.material3) ...[
+                                NavigationRail(
+                                  selectedIndex: 0,
+                                  groupAlignment: -0.85,
+                                  labelType: NavigationRailLabelType.all,
+                                  leading: Padding(
+                                    padding: const EdgeInsets.only(bottom: 8),
+                                    child: Icon(
+                                      Icons.forum_outlined,
+                                      size: 28,
+                                      color: Theme.of(context)
+                                          .colorScheme
+                                          .primary,
                                     ),
-                                    label: Text('Tools'),
                                   ),
-                                  NavigationRailDestination(
-                                    icon: Icon(Icons.settings_outlined),
-                                    label: Text('Settings'),
-                                  ),
-                                ],
+                                  onDestinationSelected: (i) {
+                                    switch (i) {
+                                      case 1:
+                                        unawaited(openCommandPalette());
+                                      case 2:
+                                        unawaited(searchAll());
+                                      case 3:
+                                        unawaited(openTools());
+                                      case 4:
+                                        openSettings();
+                                    }
+                                  },
+                                  destinations: const [
+                                    NavigationRailDestination(
+                                      icon: Icon(Icons.chat_bubble_outline),
+                                      selectedIcon: Icon(Icons.chat_bubble),
+                                      label: Text('Chats'),
+                                    ),
+                                    NavigationRailDestination(
+                                      icon: Icon(Icons.bolt_outlined),
+                                      label: Text('Commands'),
+                                    ),
+                                    NavigationRailDestination(
+                                      icon: Icon(Icons.travel_explore),
+                                      label: Text('Search'),
+                                    ),
+                                    NavigationRailDestination(
+                                      icon: Icon(
+                                        Icons.dashboard_customize_outlined,
+                                      ),
+                                      label: Text('Tools'),
+                                    ),
+                                    NavigationRailDestination(
+                                      icon: Icon(Icons.settings_outlined),
+                                      label: Text('Settings'),
+                                    ),
+                                  ],
+                                ),
+                                const VerticalDivider(width: 1),
+                              ],
+                              SizedBox(
+                                width: 340,
+                                child: sidebar(
+                                  true,
+                                  rail: widget.settings.material3,
+                                ),
                               ),
                               const VerticalDivider(width: 1),
-                            ],
-                            SizedBox(
-                              width: 340,
-                              child: sidebar(
-                                true,
-                                rail: widget.settings.material3,
-                              ),
-                            ),
-                            const VerticalDivider(width: 1),
-                            Expanded(
-                              child: selected == null
-                                  ? _chatPlaceholder()
-                                  : ChatView(
-                                      key: ValueKey(
-                                        _jumpTarget == null
-                                            ? selected!.key
-                                            : '${selected!.key}|${Store.messageKey(_jumpTarget!)}',
+                              Expanded(
+                                child: selected == null
+                                    ? _chatPlaceholder()
+                                    : ChatView(
+                                        key: ValueKey(
+                                          _jumpTarget == null
+                                              ? selected!.key
+                                              : '${selected!.key}|${Store.messageKey(_jumpTarget!)}',
+                                        ),
+                                        store: store,
+                                        chat: selected!,
+                                        initialTarget: _jumpTarget,
                                       ),
-                                      store: store,
-                                      chat: selected!,
-                                      initialTarget: _jumpTarget,
-                                    ),
-                            ),
-                          ],
-                        )
-                      : sidebar(false),
+                              ),
+                            ],
+                          )
+                        : sidebar(false),
+                  ),
                 ),
               );
             },

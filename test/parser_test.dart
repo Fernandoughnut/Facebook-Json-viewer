@@ -94,9 +94,13 @@ void main() {
       });
       File('${dir.path}/a.jpg').writeAsStringSync('lower');
       File('${dir.path}/A.jpg').writeAsStringSync('upper');
+      File('${dir.path}/broken.jpg.part').writeAsStringSync('partial');
+      File('${dir.path}/broken.jpg.tmp').writeAsStringSync('partial');
 
       final scanned = scanDir(dir.path);
       expect(scanned['a.jpg'], endsWith('A.jpg'));
+      expect(scanned.containsKey('broken.jpg.part'), isFalse);
+      expect(scanned.containsKey('broken.jpg.tmp'), isFalse);
     },
   );
 }

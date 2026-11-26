@@ -435,20 +435,32 @@ Msg _decodeMsg(List l) => Msg(
   raw: l.length > 10 && l[10] is Map ? (l[10] as Map) : const {},
 );
 
-Object _encodeThreads(List<ParsedThread> threads, bool keepRaw) =>
-    <String, dynamic>{
-      'format': cacheFormatVersion,
-      'parser': parserVersion,
-      'threads': [
-        for (final t in threads)
-          <String, dynamic>{
-            'k': t.key,
-            'n': t.title,
-            'p': t.participants,
-            'm': [for (final m in t.messages) _encodeMsg(m, keepRaw)],
-          },
-      ],
-    };
+/// Write the cache incrementally. Building one enormous JSON string would
+/// temporarily hold a second copy of every message in the isolate's heap.
+void _writeCacheFile(File file, List<ParsedThread> threads, bool keepRaw) {
+  final raf = file.openSync(mode: FileMode.write);
+  try {
+    raf.writeStringSync(
+      '{"format":$cacheFormatVersion,"parser":$parserVersion,"threads":[',
+    );
+    for (var ti = 0; ti < threads.length; ti++) {
+      final t = threads[ti];
+      if (ti > 0) raf.writeStringSync(',');
+      raf.writeStringSync(
+        '{"k":${jsonEncode(t.key)},"n":${jsonEncode(t.title)},'
+        '"p":${jsonEncode(t.participants)},"m":[',
+      );
+      for (var mi = 0; mi < t.messages.length; mi++) {
+        if (mi > 0) raf.writeStringSync(',');
+        raf.writeStringSync(jsonEncode(_encodeMsg(t.messages[mi], keepRaw)));
+      }
+      raf.writeStringSync(']}');
+    }
+    raf.writeStringSync(']}');
+  } finally {
+    raf.closeSync();
+  }
+}
 
 List<ParsedThread> _decodeThreads(Object? value) {
   final root = value as Map?;
@@ -471,6 +483,40 @@ List<ParsedThread> _decodeThreads(Object? value) {
     );
   }
   return out;
+}
+
+/// Remove cache files left behind by older parser versions or interrupted
+/// writes. Only the short header is read, so this stays cheap for large caches.
+void pruneParseCache(String cacheDir) {
+  final dir = Directory(cacheDir);
+  if (!dir.existsSync()) return;
+  for (final e in dir.listSync()) {
+    if (e is! File) continue;
+    final name = e.path.split(pathSep).last;
+    try {
+      if (name.endsWith('.tmp')) {
+        e.deleteSync();
+        continue;
+      }
+      if (!name.endsWith('.json')) continue;
+      final raf = e.openSync();
+      late final String head;
+      try {
+        head = utf8.decode(raf.readSync(128));
+      } finally {
+        raf.closeSync();
+      }
+      if (!head.contains('"format":$cacheFormatVersion') ||
+          !head.contains('"parser":$parserVersion')) {
+        e.deleteSync();
+      }
+    } catch (_) {
+      // Unreadable or raced files are cache-only; drop them on the next pass.
+      try {
+        e.deleteSync();
+      } catch (_) {}
+    }
+  }
 }
 
 List<ParsedThread> parseFileCached(
@@ -499,7 +545,7 @@ List<ParsedThread> parseFileCached(
     final tmp = File(
       '${file.path}.$pid.${DateTime.now().microsecondsSinceEpoch}.tmp',
     );
-    tmp.writeAsStringSync(jsonEncode(_encodeThreads(threads, keepRaw)));
+    _writeCacheFile(tmp, threads, keepRaw);
     if (file.existsSync()) file.deleteSync();
     tmp.renameSync(file.path);
   } catch (_) {
@@ -517,7 +563,10 @@ Map<String, String> scanDir(String dir) {
     ).listSync(recursive: true, followLinks: false)) {
       if (e is File) {
         final n = e.path.split(pathSep).last.toLowerCase();
-        if (!n.endsWith('.json')) {
+        // Interrupted SAF copies leave .part files behind; they are not media.
+        if (!n.endsWith('.json') &&
+            !n.endsWith('.part') &&
+            !n.endsWith('.tmp')) {
           // Case-only collisions must not depend on directory iteration order.
           final prev = out[n];
           if (prev == null || e.path.compareTo(prev) < 0) out[n] = e.path;

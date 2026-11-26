@@ -116,6 +116,38 @@ void main() {
     expect(settings.jsonPaths, isNot(contains(json.path)));
   });
 
+  test(
+    'overlapping imports dedupe after the seen index was compacted',
+    () async {
+      final dir = await Directory.systemTemp.createTemp('indexed_store_test_');
+      addTearDown(() {
+        if (dir.existsSync()) dir.deleteSync(recursive: true);
+      });
+      final settings = AppSettings(configDir: dir.path);
+      addTearDown(settings.dispose);
+      await settings.load();
+      final store = Store(settings);
+
+      final source = File('test/fixtures/test_message.json').readAsStringSync();
+      final first = File('${dir.path}/first.json')..writeAsStringSync(source);
+      final second = File('${dir.path}/second.json')..writeAsStringSync(source);
+
+      await store.addJsonFiles([first.path]);
+      final initial = store.chats.values.fold<int>(
+        0,
+        (n, c) => n + c.messages.length,
+      );
+      await store.addJsonFiles([second.path]);
+      final after = store.chats.values.fold<int>(
+        0,
+        (n, c) => n + c.messages.length,
+      );
+
+      expect(initial, greaterThan(0));
+      expect(after, initial);
+    },
+  );
+
   test('global search returns nothing for an empty query', () async {
     final dir = await Directory.systemTemp.createTemp('indexed_store_test_');
     addTearDown(() {

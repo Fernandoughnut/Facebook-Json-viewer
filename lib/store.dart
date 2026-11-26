@@ -72,6 +72,8 @@ const int globalSearchLimit = 20000;
 typedef GlobalSearchResult = ({List<GlobalHit> hits, bool truncated});
 
 class Store extends ChangeNotifier {
+  static const int _maxMediaStatsEntries = 128;
+
   final AppSettings settings;
   Store(this.settings) {
     me = settings.me;
@@ -234,6 +236,11 @@ class Store extends ChangeNotifier {
     }
     final stats = MediaStats(total, fromChat, fromShared, missing, sample);
     _mediaStats[key] = stats;
+    // Folder versions and message counts change over time; keep only a bounded
+    // window instead of retaining every old snapshot for the whole session.
+    if (_mediaStats.length > _maxMediaStatsEntries) {
+      _mediaStats.remove(_mediaStats.keys.first);
+    }
     return stats;
   }
 
@@ -353,6 +360,11 @@ class Store extends ChangeNotifier {
       ? 'id:${m.id}'
       : 'msg:${m.t}|${m.sender}|${m.text}|${m.media.map((x) => x.uri).join(',')}';
 
+  /// A compact identity for the long-lived dedupe index. Keeping whole text
+  /// strings here would retain a second copy of every message during import.
+  static int _dedupeHash(String chatKey, Msg m) =>
+      Object.hash(chatKey, dedupeKey(m));
+
   /// Android's file picker copies picks into the app cache, which can be wiped
   /// between runs. Keep a durable copy for anything we decide to remember.
   Future<String> _persistJsonPath(String path) async {
@@ -384,11 +396,12 @@ class Store extends ChangeNotifier {
     var duplicates = 0;
     var skippedRemoved = 0;
     final problems = <String>[];
-    final seen = <String>{};
+    final seen = <int>{};
+    final touched = <String>{};
     if (settings.dedupeImports) {
       for (final c in chats.values) {
         for (final m in c.messages) {
-          seen.add('${c.key}|${dedupeKey(m)}');
+          seen.add(_dedupeHash(c.key, m));
         }
       }
     }
@@ -421,12 +434,13 @@ class Store extends ChangeNotifier {
               continue;
             }
             activeKeys.add(t.key);
+            touched.add(t.key);
             _pathsForChat.putIfAbsent(t.key, () => <String>{}).add(path);
             final c = chats.putIfAbsent(t.key, () => Chat(t.key, t.title));
             c.participants.addAll(t.participants);
             for (final m in t.messages) {
               c.participants.add(m.sender);
-              final k = '${c.key}|${dedupeKey(m)}';
+              final k = _dedupeHash(c.key, m);
               if (settings.dedupeImports && !seen.add(k)) {
                 duplicates++;
                 continue;
@@ -452,8 +466,9 @@ class Store extends ChangeNotifier {
     } finally {
       _busy--;
     }
-    for (final c in chats.values) {
-      c.messages.sort((a, b) => (a.t ?? 0).compareTo(b.t ?? 0));
+    // Only chats that received messages can have become unsorted.
+    for (final key in touched) {
+      chats[key]?.messages.sort((a, b) => (a.t ?? 0).compareTo(b.t ?? 0));
     }
     _mediaStats.clear();
     final replies = rebuildReplyIndex();

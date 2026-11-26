@@ -2163,12 +2163,21 @@ class _ChatViewState extends State<ChatView> {
               ? -delta
               : delta)
         : (_reversed ? -delta : delta);
-    final matches = panelMode
-        ? results
-        : List<int>.generate(view.length, (i) => i);
-    if (matches.isEmpty) return;
-    final pos = nextMatchPosition(highlight, matches, visibleDelta);
-    if (pos >= 0) jumpToMessage(matches[pos]);
+    if (panelMode) {
+      if (results.isEmpty) return;
+      final pos = nextMatchPosition(highlight, results, visibleDelta);
+      if (pos >= 0) jumpToMessage(results[pos]);
+      return;
+    }
+    // In-place search uses the view itself as the match list; wrapping can be
+    // done arithmetically instead of allocating an identity list of all rows.
+    final n = view.length;
+    if (n == 0) return;
+    var current = highlight;
+    if (current == null || current < 0 || current >= n) {
+      current = visibleDelta > 0 ? -1 : 0;
+    }
+    jumpToMessage((current + visibleDelta + n) % n);
   }
 
   /// Esc: close the narrow results panel first, then clear the search.
