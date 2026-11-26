@@ -50,6 +50,7 @@ enum _ChatMenuAction {
   mediaInfo,
   miniMap,
   indexBar,
+  immersive,
   jumpToDate,
   select,
   export,
@@ -95,12 +96,14 @@ class _IndexScrollbar extends StatefulWidget {
     required this.topIndex,
     required this.visibleCount,
     required this.onJump,
+    this.immersive = false,
   });
 
   final int itemCount;
   final ValueListenable<int> topIndex;
   final ValueListenable<int> visibleCount;
   final ValueChanged<int> onJump;
+  final bool immersive;
 
   @override
   State<_IndexScrollbar> createState() => _IndexScrollbarState();
@@ -111,6 +114,11 @@ class _IndexScrollbarState extends State<_IndexScrollbar> {
   /// feel frozen. The thumb follows the pointer locally; actual jumps are
   /// throttled and a final jump is issued when the drag ends.
   static const _jumpInterval = Duration(milliseconds: 180);
+
+  /// Fixed track used only to convert a pointer's global Y into an index. The
+  /// gesture target itself is just the pill, so touching the empty track never
+  /// jumps or consumes a navigation gesture.
+  final GlobalKey _trackKey = GlobalKey();
 
   int? _preview;
   int? _pending;
@@ -153,6 +161,16 @@ class _IndexScrollbarState extends State<_IndexScrollbar> {
       0,
       widget.itemCount - 1,
     );
+  }
+
+  /// Convert a pointer position to a Y inside the fixed track. The pill moves
+  /// while dragging, so using its own local coordinates would drift.
+  double? _trackDy(Offset global) {
+    final context = _trackKey.currentContext;
+    if (context == null) return null;
+    final box = context.findRenderObject();
+    if (box is! RenderBox || !box.hasSize) return null;
+    return box.globalToLocal(global).dy;
   }
 
   void _drag(double dy, double height, double thumbHeight) {
@@ -207,9 +225,15 @@ class _IndexScrollbarState extends State<_IndexScrollbar> {
           return LayoutBuilder(
             builder: (context, box) {
               final height = box.maxHeight;
-              final thumbHeight = math.max(
-                24.0,
-                height * visible / math.max(1, widget.itemCount),
+              // A long pill is easier to catch than a hairline thumb. Keep it
+              // proportional for short chats, but never shrink it to a speck on
+              // huge variable-height conversations.
+              final minThumb = widget.immersive ? 64.0 : 48.0;
+              final proportional =
+                  height * visible / math.max(1, widget.itemCount);
+              final thumbHeight = math.min(
+                height * 0.6,
+                math.max(minThumb, proportional),
               );
               final maxTop = math.max(0, widget.itemCount - visible);
               if (_preview != null &&
@@ -222,56 +246,54 @@ class _IndexScrollbarState extends State<_IndexScrollbar> {
                   ? 0.0
                   : (position / maxTop).clamp(0.0, 1.0);
               final thumbTop = progress * math.max(0.0, height - thumbHeight);
-              // Keep the strip away from the physical edge so Android's
-              // gesture-navigation back swipe has room to start. Only vertical
-              // drags and completed taps are handled here; horizontal swipes
-              // are left to the ancestor/system.
+              // No full-height track and no divider: only the pill is
+              // hit-testable. Touches in the empty space above/below it (and
+              // the 12 dp edge inset added by the parent) pass straight through
+              // to gesture navigation.
               return Padding(
-                padding: const EdgeInsets.only(right: 12),
-                child: GestureDetector(
-                  behavior: HitTestBehavior.translucent,
-                  onTapUp: (d) {
-                    _drag(d.localPosition.dy, height, thumbHeight);
-                    _endDrag();
-                  },
-                  onVerticalDragStart: (d) =>
-                      _drag(d.localPosition.dy, height, thumbHeight),
-                  onVerticalDragUpdate: (d) =>
-                      _drag(d.localPosition.dy, height, thumbHeight),
-                  onVerticalDragEnd: (_) => _endDrag(),
-                  onVerticalDragCancel: _endDrag,
-                  child: Container(
-                    width: 14,
-                    margin: const EdgeInsets.symmetric(vertical: 4),
-                    child: Stack(
-                      children: [
-                        Positioned.fill(
-                          child: Center(
-                            child: Container(
-                              width: 3,
-                              decoration: BoxDecoration(
-                                color: cs.outlineVariant.withValues(
-                                  alpha: 0.55,
-                                ),
-                                borderRadius: BorderRadius.circular(2),
-                              ),
-                            ),
-                          ),
-                        ),
-                        Positioned(
-                          top: thumbTop,
-                          height: thumbHeight,
-                          left: 4,
-                          right: 4,
-                          child: Container(
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                child: SizedBox(
+                  key: _trackKey,
+                  width: 18,
+                  child: Stack(
+                    children: [
+                      Positioned(
+                        top: thumbTop,
+                        height: thumbHeight,
+                        left: 0,
+                        right: 0,
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTapUp: (d) {
+                            final dy = _trackDy(d.globalPosition);
+                            if (dy == null) return;
+                            _drag(dy, height, thumbHeight);
+                            _endDrag();
+                          },
+                          onVerticalDragStart: (d) {
+                            final dy = _trackDy(d.globalPosition);
+                            if (dy != null) _drag(dy, height, thumbHeight);
+                          },
+                          onVerticalDragUpdate: (d) {
+                            final dy = _trackDy(d.globalPosition);
+                            if (dy != null) _drag(dy, height, thumbHeight);
+                          },
+                          onVerticalDragEnd: (_) => _endDrag(),
+                          onVerticalDragCancel: _endDrag,
+                          child: AnimatedContainer(
+                            duration: const Duration(milliseconds: 120),
+                            width: widget.immersive ? 7 : 6,
+                            height: thumbHeight,
                             decoration: BoxDecoration(
-                              color: cs.onSurface.withValues(alpha: 0.28),
-                              borderRadius: BorderRadius.circular(4),
+                              color: cs.onSurface.withValues(
+                                alpha: widget.immersive ? 0.48 : 0.32,
+                              ),
+                              borderRadius: BorderRadius.circular(999),
                             ),
                           ),
                         ),
-                      ],
-                    ),
+                      ),
+                    ],
                   ),
                 ),
               );
@@ -362,6 +384,14 @@ class _ChatViewState extends State<ChatView> {
 
   /// Whether the search/filter header is collapsed into its slim strip.
   final ValueNotifier<bool> _topBarHidden = ValueNotifier(false);
+
+  /// Immersive mode keeps the overlay position bar hidden until a fast flick.
+  final ValueNotifier<bool> _immersiveBarVisible = ValueNotifier(false);
+  bool _immersiveHeaderExpanded = false;
+  Timer? _immersiveBarTimer;
+  double? _lastFastPixels;
+  int? _lastFastAt;
+
   double? _lastScrollPixels;
   int _ignoreScrollUntil = 0;
 
@@ -444,6 +474,8 @@ class _ChatViewState extends State<ChatView> {
     positions.itemPositions.removeListener(_onPositions);
     _hlTimer?.cancel();
     _searchTimer?.cancel();
+    _immersiveBarTimer?.cancel();
+    _immersiveBarVisible.dispose();
     qc.dispose();
     searchFocus.dispose();
     _resultsController.dispose();
@@ -467,7 +499,11 @@ class _ChatViewState extends State<ChatView> {
     });
   }
 
-  Widget _searchToolbar(Widget panelToggle, Widget overflowMenu) {
+  Widget _searchToolbar(
+    Widget panelToggle,
+    Widget overflowMenu, {
+    List<Widget> extraTrailing = const [],
+  }) {
     if (!Theme.of(context).useMaterial3) {
       return Row(
         children: [
@@ -487,6 +523,7 @@ class _ChatViewState extends State<ChatView> {
           const SizedBox(width: 4),
           panelToggle,
           overflowMenu,
+          ...extraTrailing,
         ],
       );
     }
@@ -495,7 +532,7 @@ class _ChatViewState extends State<ChatView> {
       focusNode: searchFocus,
       hintText: 'Search messages',
       leading: const Icon(Icons.search),
-      trailing: [panelToggle, overflowMenu],
+      trailing: [panelToggle, overflowMenu, ...extraTrailing],
       onChanged: _onSearchChanged,
     );
   }
@@ -714,20 +751,64 @@ class _ChatViewState extends State<ChatView> {
 
   // ---------- header that follows the scroll ----------
 
+  /// Briefly reveal the overlay position bar for a fast flick.
+  void _flashImmersiveBar() {
+    if (!settings.immersiveMode) return;
+    _immersiveBarVisible.value = true;
+    _immersiveBarTimer?.cancel();
+    _immersiveBarTimer = Timer(const Duration(milliseconds: 1200), () {
+      if (mounted) _immersiveBarVisible.value = false;
+    });
+  }
+
+  void toggleImmersive() {
+    settings.update(() => settings.immersiveMode = !settings.immersiveMode);
+    _immersiveHeaderExpanded = false;
+    _immersiveBarTimer?.cancel();
+    _immersiveBarVisible.value = false;
+    if (settings.immersiveMode && mounted) {
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Immersive mode: scroll fast to reveal the position bar',
+          ),
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
   bool _onScrollNotification(ScrollNotification n) {
-    if (!settings.autoHideTopBar) return false;
     if (n is! ScrollUpdateNotification && n is! ScrollEndNotification) {
       return false;
     }
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final pixels = n.metrics.pixels;
+
+    if (settings.immersiveMode && n is ScrollUpdateNotification) {
+      final prev = _lastFastPixels;
+      final prevAt = _lastFastAt;
+      if (prev != null && prevAt != null) {
+        if (isFastScroll(pixels - prev, now - prevAt)) _flashImmersiveBar();
+      }
+      _lastFastPixels = pixels;
+      _lastFastAt = now;
+    } else {
+      _lastFastPixels = null;
+      _lastFastAt = null;
+    }
+
+    if (!settings.autoHideTopBar) return false;
     // The query and selection controls live in the header. Never collapse it
     // while the reader is using them.
     if (query.isNotEmpty || searchFocus.hasFocus || selecting) return false;
-    final now = DateTime.now().millisecondsSinceEpoch;
-    final pixels = n.metrics.pixels;
     final prev = _lastScrollPixels;
     _lastScrollPixels = pixels;
     if (now < _ignoreScrollUntil || prev == null) return false;
     final delta = pixels - prev;
+    if (settings.immersiveMode && _immersiveHeaderExpanded && delta > 2) {
+      setState(() => _immersiveHeaderExpanded = false);
+    }
     if (pixels <= 96) {
       if (_topBarHidden.value) _topBarHidden.value = false;
     } else if (delta > 2) {
@@ -742,6 +823,17 @@ class _ChatViewState extends State<ChatView> {
     _ignoreScrollUntil = now + 250;
     _lastScrollPixels = null;
     return false;
+  }
+
+  Widget _collapseImmersiveHeaderButton() {
+    return IconButton(
+      tooltip: 'Compact header',
+      visualDensity: VisualDensity.compact,
+      constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+      padding: EdgeInsets.zero,
+      icon: const Icon(Icons.expand_less, size: 18),
+      onPressed: () => setState(() => _immersiveHeaderExpanded = false),
+    );
   }
 
   /// Slim replacement for the search/filter header. The people-filter eye
@@ -765,8 +857,15 @@ class _ChatViewState extends State<ChatView> {
               child: InkWell(
                 borderRadius: BorderRadius.circular(20),
                 onTap: () {
-                  _topBarHidden.value = false;
-                  searchFocus.requestFocus();
+                  if (settings.immersiveMode) {
+                    setState(() => _immersiveHeaderExpanded = true);
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (mounted) searchFocus.requestFocus();
+                    });
+                  } else {
+                    _topBarHidden.value = false;
+                    searchFocus.requestFocus();
+                  }
                 },
                 child: SizedBox(
                   height: 38,
@@ -798,13 +897,28 @@ class _ChatViewState extends State<ChatView> {
           ),
           const SizedBox(width: 2),
           _peopleFilterToggle(),
+          if (settings.immersiveMode)
+            IconButton(
+              tooltip: 'Exit immersive mode',
+              visualDensity: VisualDensity.compact,
+              constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+              padding: EdgeInsets.zero,
+              icon: const Icon(Icons.fullscreen_exit, size: 18),
+              onPressed: toggleImmersive,
+            ),
           IconButton(
             tooltip: 'Show search and filters',
             visualDensity: VisualDensity.compact,
             constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
             padding: EdgeInsets.zero,
             icon: const Icon(Icons.expand_more, size: 18),
-            onPressed: () => _topBarHidden.value = false,
+            onPressed: () {
+              if (settings.immersiveMode) {
+                setState(() => _immersiveHeaderExpanded = true);
+              } else {
+                _topBarHidden.value = false;
+              }
+            },
           ),
         ],
       ),
@@ -1180,6 +1294,8 @@ class _ChatViewState extends State<ChatView> {
         settings.update(
           () => settings.showIndexScrollbar = !settings.showIndexScrollbar,
         );
+      case _ChatMenuAction.immersive:
+        toggleImmersive();
       case _ChatMenuAction.gallery:
         setState(() => gallery = !gallery);
       case _ChatMenuAction.mediaInfo:
@@ -1340,7 +1456,13 @@ class _ChatViewState extends State<ChatView> {
         ),
         CheckboxMenuButton(
           style: _roundedMenuItemStyle,
-          value: settings.showActivityRail,
+          value: settings.immersiveMode,
+          onChanged: (_) => handleMenu(_ChatMenuAction.immersive),
+          child: const Text('Immersive mode'),
+        ),
+        CheckboxMenuButton(
+          style: _roundedMenuItemStyle,
+          value: settings.showActivityRail && !settings.immersiveMode,
           onChanged: (_) => handleMenu(_ChatMenuAction.miniMap),
           child: const Text('Activity rail'),
         ),
@@ -2457,6 +2579,11 @@ class _ChatViewState extends State<ChatView> {
           checked: settings.showIndexScrollbar,
           child: const Text('Position bar'),
         ),
+        CheckedPopupMenuItem<Object>(
+          value: _ChatMenuAction.immersive,
+          checked: settings.immersiveMode,
+          child: const Text('Immersive mode'),
+        ),
         const PopupMenuItem<Object>(
           value: _ChatMenuAction.jumpToDate,
           child: Row(
@@ -2503,6 +2630,7 @@ class _ChatViewState extends State<ChatView> {
     final overflowMenu = settings.material3
         ? materialOverflowMenu()
         : legacyMoreMenu;
+    final immersive = settings.immersiveMode;
 
     return LayoutBuilder(
       builder: (context, box) {
@@ -2510,6 +2638,11 @@ class _ChatViewState extends State<ChatView> {
         final panelVisible = panelMode && query.isNotEmpty;
         final panelSide = panelVisible && _wide;
         final panelFull = panelVisible && !_wide && resultsOpen;
+        final showPositionBar =
+            !gallery &&
+            !panelFull &&
+            view.isNotEmpty &&
+            settings.showIndexScrollbar;
         final Widget body = gallery
             ? galleryView()
             : (panelFull ? resultsPanel() : listView());
@@ -2531,7 +2664,12 @@ class _ChatViewState extends State<ChatView> {
                 ValueListenableBuilder<bool>(
                   valueListenable: _topBarHidden,
                   builder: (context, hidden, _) {
-                    final full = !settings.autoHideTopBar || !hidden;
+                    // Immersive mode is compact by default, but the expand
+                    // button can reveal the full controls temporarily.
+                    final compact = immersive && !_immersiveHeaderExpanded;
+                    final full = compact
+                        ? false
+                        : immersive || !settings.autoHideTopBar || !hidden;
                     return AnimatedSize(
                       duration: const Duration(milliseconds: 180),
                       curve: Curves.easeOut,
@@ -2550,6 +2688,9 @@ class _ChatViewState extends State<ChatView> {
                                   child: _searchToolbar(
                                     panelToggle,
                                     overflowMenu,
+                                    extraTrailing: immersive
+                                        ? [_collapseImmersiveHeaderButton()]
+                                        : const [],
                                   ),
                                 ),
                                 Padding(
@@ -2575,49 +2716,69 @@ class _ChatViewState extends State<ChatView> {
                   child: NotificationListener<ScrollNotification>(
                     onNotification: _onScrollNotification,
                     // The same Row is always used, so the message list is never torn down just
-                    // because the results panel appears next to it.
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                    // because the results panel appears next to it. The position bar is an
+                    // overlay and never takes width from the conversation.
+                    child: Stack(
                       children: [
-                        if (settings.showActivityRail &&
-                            !gallery &&
-                            view.isNotEmpty)
-                          activityRail(),
-                        Expanded(
-                          child: Stack(
-                            children: [
-                              Positioned.fill(child: body),
-                              if (!gallery &&
-                                  !panelFull &&
-                                  dateSort &&
-                                  settings.showDatePill)
-                                Positioned(
-                                  top: 8,
-                                  left: 0,
-                                  right: 0,
-                                  child: IgnorePointer(
-                                    child: Center(child: _datePill()),
-                                  ),
-                                ),
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            if (settings.showActivityRail &&
+                                !immersive &&
+                                !gallery &&
+                                view.isNotEmpty)
+                              activityRail(),
+                            Expanded(
+                              child: Stack(
+                                children: [
+                                  Positioned.fill(child: body),
+                                  if (!gallery &&
+                                      !panelFull &&
+                                      dateSort &&
+                                      settings.showDatePill)
+                                    Positioned(
+                                      top: 8,
+                                      left: 0,
+                                      right: 0,
+                                      child: IgnorePointer(
+                                        child: Center(child: _datePill()),
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            ),
+                            if (panelSide) ...[
+                              const VerticalDivider(width: 1),
+                              SizedBox(width: 360, child: resultsPanel()),
                             ],
-                          ),
+                          ],
                         ),
-                        if (!gallery &&
-                            !panelFull &&
-                            view.isNotEmpty &&
-                            settings.showIndexScrollbar) ...[
-                          const VerticalDivider(width: 1),
-                          _IndexScrollbar(
-                            itemCount: view.length,
-                            topIndex: _scrollTop,
-                            visibleCount: _visibleCount,
-                            onJump: scrubTo,
+                        if (showPositionBar)
+                          Positioned(
+                            right: panelSide ? 373 : 12,
+                            top: 6,
+                            bottom: 6,
+                            child: ValueListenableBuilder<bool>(
+                              valueListenable: _immersiveBarVisible,
+                              builder: (context, flashed, _) {
+                                final visible = !immersive || flashed;
+                                return AnimatedOpacity(
+                                  opacity: visible ? 1 : 0,
+                                  duration: const Duration(milliseconds: 180),
+                                  child: IgnorePointer(
+                                    ignoring: !visible,
+                                    child: _IndexScrollbar(
+                                      itemCount: view.length,
+                                      topIndex: _scrollTop,
+                                      visibleCount: _visibleCount,
+                                      onJump: scrubTo,
+                                      immersive: immersive,
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
                           ),
-                        ],
-                        if (panelSide) ...[
-                          const VerticalDivider(width: 1),
-                          SizedBox(width: 360, child: resultsPanel()),
-                        ],
                       ],
                     ),
                   ),

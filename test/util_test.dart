@@ -99,6 +99,13 @@ void main() {
       );
     },
   );
+
+  test('isFastScroll reacts to flicks, not slow drags', () {
+    expect(isFastScroll(300, 100), isTrue);
+    expect(isFastScroll(-300, 100), isTrue);
+    expect(isFastScroll(20, 100), isFalse);
+    expect(isFastScroll(300, 0), isFalse);
+  });
 }
 
 class _At {

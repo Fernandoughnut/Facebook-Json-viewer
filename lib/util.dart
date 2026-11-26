@@ -100,6 +100,14 @@ bool sameMinute(int? a, int? b) {
   return a ~/ 60000 == b ~/ 60000;
 }
 
+/// Immersive mode reveals its overlay position bar only for fast scrolls.
+const double kFastScrollPxPerSecond = 900;
+
+bool isFastScroll(double deltaPx, int elapsedMs) {
+  if (elapsedMs <= 0) return false;
+  return (deltaPx.abs() * 1000) / elapsedMs >= kFastScrollPxPerSecond;
+}
+
 /// Name shown in the UI: the alias if one was set, otherwise the export's name.
 String displayName(String name) => gSettings?.aliasFor(name) ?? name;
 

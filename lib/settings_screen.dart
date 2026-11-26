@@ -648,9 +648,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
       SwitchListTile(
         contentPadding: EdgeInsets.zero,
+        title: const Text('Start conversations in immersive mode'),
+        subtitle: const Text(
+          'Compact search pill, no activity rail, and an overlay position bar that appears only during fast scrolling. Toggle it any time from the chat menu or the compact header.',
+        ),
+        value: settings.immersiveMode,
+        onChanged: (v) => settings.update(() => settings.immersiveMode = v),
+      ),
+      SwitchListTile(
+        contentPadding: EdgeInsets.zero,
         title: const Text('Show activity rail in chats'),
         subtitle: const Text(
-          'A small density bar for jumping between months. Can also be toggled in the chat menu.',
+          'A small density bar for jumping between months. Off by default; can be toggled in the chat menu.',
         ),
         value: settings.showActivityRail,
         onChanged: (v) => settings.update(() => settings.showActivityRail = v),
@@ -659,7 +668,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         contentPadding: EdgeInsets.zero,
         title: const Text('Show position bar in chats'),
         subtitle: const Text(
-          'The thin bar inset from the right edge for jumping through a long conversation by message index. It ignores horizontal edge swipes so gesture Back still works. Can also be toggled in the chat menu.',
+          'A short rounded pill inset from the right edge. Only touching the pill itself jumps; empty space and gesture Back pass through. In immersive mode it fades in only when you scroll fast.',
         ),
         value: settings.showIndexScrollbar,
         onChanged: (v) =>

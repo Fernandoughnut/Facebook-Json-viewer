@@ -13,11 +13,19 @@ Planned next:
 
 ### Added
 
+- Immersive conversation mode: a compact search pill with the people-filter eye
+  always available, no activity rail, and an overlay position bar that appears
+  only during fast scrolling. Toggle it from the chat menu, the compact header,
+  or Settings; the choice persists across chats and launches.
 - Real Indexed launcher artwork: adaptive Android icons (including monochrome)
   and a bundled Linux window icon.
 
 ### Changed
 
+- The left-side activity rail is now off by default on Linux and Android. Older
+  state files are migrated off once, then user choices are respected.
+- The right-hand position bar is now a rounded overlay pill with no divider and
+  no allocated width, so the conversation never resizes around it.
 - Android system Back now returns from an open conversation to the chat list,
   leaves dialogs intact, and exits cleanly from the chat list.
 - Parse cache files are written incrementally, avoiding a second full copy of
@@ -30,9 +38,8 @@ Planned next:
 ### Fixed
 
 - Overlapping imports still dedupe correctly after the compact index change.
-- The chat position bar is thinner, inset from the screen edge, and responds
-  only to vertical drags/taps, so Android gesture Back no longer gets swallowed
-  by a horizontal swipe near the right edge.
+- Only the position bar's pill itself is hit-testable now. Touching the empty
+  track no longer jumps immediately or steals Android gesture Back swipes.
 
 ## [1.3.0] - 2026-11-26
 

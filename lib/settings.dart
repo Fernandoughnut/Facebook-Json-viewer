@@ -117,7 +117,9 @@ class AppSettings extends ChangeNotifier {
   ResultsLayout resultsLayout = ResultsLayout.detailed;
   bool resultsNewestFirst = true;
   List<SearchPreset> presets = [];
-  bool showActivityRail = true;
+  bool showActivityRail = false; // off by default on every platform
+  // One-time migration: older state files stored the old "on" default.
+  bool activityRailDefaultApplied = false;
   // Kept for old state files: people filters now open in their own dialog.
   bool showPeopleFilters = true;
   bool showDatePill = true; // small date chip that follows the scroll position
@@ -125,6 +127,8 @@ class AppSettings extends ChangeNotifier {
       true; // collapse search/filters while scrolling down a chat
   bool showIndexScrollbar =
       true; // position bar at the right edge of an open chat
+  bool immersiveMode =
+      false; // compact chrome + overlay position bar while reading
   bool groupTimesByMinute =
       true; // show time only on the last message of a minute
 
@@ -165,6 +169,7 @@ class AppSettings extends ChangeNotifier {
 
   Timer? _timer;
   Future<void> _lastWrite = Future.value();
+  bool _writeAfterLoad = false;
 
   String get dir {
     final override = _configDir;
@@ -382,10 +387,12 @@ class AppSettings extends ChangeNotifier {
     'resultsNewestFirst': resultsNewestFirst,
     'searchPresets': [for (final p in presets) p.toJson()],
     'showActivityRail': showActivityRail,
+    'activityRailDefaultApplied': activityRailDefaultApplied,
     'showPeopleFilters': showPeopleFilters,
     'showDatePill': showDatePill,
     'autoHideTopBar': autoHideTopBar,
     'showIndexScrollbar': showIndexScrollbar,
+    'immersiveMode': immersiveMode,
     'groupTimesByMinute': groupTimesByMinute,
     'useParseCache': useParseCache,
     'keepRaw': keepRaw,
@@ -430,10 +437,20 @@ class AppSettings extends ChangeNotifier {
     );
     resultsNewestFirst = j['resultsNewestFirst'] as bool? ?? resultsNewestFirst;
     showActivityRail = j['showActivityRail'] as bool? ?? showActivityRail;
+    activityRailDefaultApplied =
+        j['activityRailDefaultApplied'] as bool? ?? activityRailDefaultApplied;
+    if (!activityRailDefaultApplied) {
+      // Older state files explicitly stored the old on-by-default value. Turn
+      // it off once, then respect whatever the user chooses afterwards.
+      if (j['showActivityRail'] == true) showActivityRail = false;
+      activityRailDefaultApplied = true;
+      _writeAfterLoad = true;
+    }
     showPeopleFilters = j['showPeopleFilters'] as bool? ?? showPeopleFilters;
     showDatePill = j['showDatePill'] as bool? ?? showDatePill;
     autoHideTopBar = j['autoHideTopBar'] as bool? ?? autoHideTopBar;
     showIndexScrollbar = j['showIndexScrollbar'] as bool? ?? showIndexScrollbar;
+    immersiveMode = j['immersiveMode'] as bool? ?? immersiveMode;
     groupTimesByMinute = j['groupTimesByMinute'] as bool? ?? groupTimesByMinute;
     final presetsJson = j['searchPresets'];
     presets = presetsJson is List
@@ -531,6 +548,10 @@ class AppSettings extends ChangeNotifier {
       if (await f.exists()) {
         final j = jsonDecode(await f.readAsString());
         if (j is Map) _fromJson(j);
+        if (_writeAfterLoad) {
+          _writeAfterLoad = false;
+          await flush();
+        }
       }
     } catch (_) {
       // a damaged or unreadable file just means default settings

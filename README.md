@@ -24,7 +24,8 @@ Built with Flutter. Linux works today; Android builds should work with the file-
 - Optional bookmarks and notes per message, both managed in Message details. Notes are searchable from the **Tools → Saved** tab.
 - A floating date pill at the top of the message list follows your scroll position and shows the date of the messages in the middle of the view. Turn it off in Settings → Search results panel if you prefer a clean view.
 - Auto-hide chat header (on by default): scrolling down collapses search into a slim strip with a search pill and the people-filter eye; scrolling up restores the full header. Both controls work on Linux and Android.
-- With **Show time once per minute** (on by default), only the last message in a busy minute shows a timestamp. The month activity rail and the right-side position bar can each be hidden in Settings or the chat menu.
+- **Immersive mode** (off by default) compacts the search bar into the slim pill, hides the left activity rail, and turns the right position bar into an overlay pill that appears only during fast scrolling. It does not resize the conversation. Toggle it from the chat menu, the compact header's exit button, or Settings; the people-filter eye stays visible.
+- With **Show time once per minute** (on by default), only the last message in a busy minute shows a timestamp. The month activity rail (off by default) and right-side position bar can each be hidden in Settings or the chat menu.
 - `Ctrl+F` jumps to the search box; `Ctrl/⌘ K` opens the command palette, and `?` shows the shortcut sheet.
 - The command palette searches every action and open conversation, so advanced features do not need permanent toolbar buttons. In Material 3 mode it uses an M3 search field and rounded, icon-backed result rows.
 
@@ -33,7 +34,8 @@ Built with Flutter. Linux works today; Android builds should work with the file-
 - Search, filtering by sender and "media only", plus **regex** and **case-sensitive** modes. The **Show messages from** / **I am** selectors live in a separate **People filters** window; open it with the eye icon in the chat header (always visible, including when the header is collapsed) or from the chat ⋮ menu. Filters apply immediately, stay active while the window is closed, and set senders appear as removable chips. Search, view, sort and export controls are grouped into one toolbar menu; only active filters appear as chips, and **Clear filters** resets the query, sender, modes, sort and selection at once.
 - **Saved searches** store a named combination of query, sender, media-only, regex/case-sensitive and sort mode. Apply, save or delete them from `Search → Saved searches…`; the active preset appears as a chip.
 - Optional search results panel: lists every match, highlights the search words, and jumps to the message in the full conversation when you click a result. Detailed or compact layout, newest or oldest first.
-- The **activity rail** is a thin vertical density bar beside the chat. Click or drag it to jump by month; it can be hidden in the chat menu or Settings.
+- The **activity rail** is an optional thin vertical density bar beside the chat. Click or drag it to jump by month; it is off by default and can be enabled in the chat menu or Settings (and is always hidden in immersive mode).
+- The **position bar** is a rounded overlay pill, inset from the right edge. Only touching the pill itself jumps; the empty track and the edge gap pass through to gesture Back. In immersive mode it fades in only when you scroll fast.
 - **Search every conversation** from the sidebar (global search), with sender/media filters and jump-to-message.
 - **Tools** screen with four tabs:
   - **Saved** — bookmarks and notes.
@@ -68,7 +70,7 @@ Built with Flutter. Linux works today; Android builds should work with the file-
 
 ### Settings and privacy
 
-- Light / dark / system theme, pure-black (AMOLED) dark mode, accent color, text size, start position, message layout, reply display, 12- or 24-hour clock, message times, photo width in chat, gallery tile size, search results layout and activity rail.
+- Light / dark / system theme, pure-black (AMOLED) dark mode, accent color, text size, start position, message layout, reply display, 12- or 24-hour clock, message times, photo width in chat, gallery tile size, search results layout, immersive mode and activity rail.
 - Settings has a search box and collapsible sections, so you can jump straight to theme, cache, PIN, media or session options.
 - Optional local PIN gate on start, stored as a salted SHA-256 hash. It is a convenience lock for a shared device, **not** encryption of your data.
 - "Forgot PIN? Reset local lock" (with confirmation) removes the gate if the PIN is lost. Settings are also flushed when the app is backgrounded or closed.
