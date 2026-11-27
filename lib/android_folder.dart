@@ -1,7 +1,5 @@
-// Bridge to the Android Storage Access Framework folder importer.
-//
-// SAF tree URIs cannot be read with dart:io, so the native side streams files
-// into an app-private folder and Dart scans that folder like any other.
+// Bridge to the Android SAF folder importer.
+// SAF trees are copied into app-private storage before Dart scans them.
 
 import 'dart:convert';
 
@@ -13,8 +11,7 @@ class AndroidFolderPicker {
     'dev.local.indexed/folder',
   );
 
-  /// Opens the Android folder picker. Returns a content:// tree URI, or null
-  /// when the user cancels. Unsupported platforms return null without a call.
+  /// Open the folder picker; returns a tree URI or null on cancel/unsupported.
   static Future<String?> pick() async {
     try {
       return await _channel.invokeMethod<String>('pickFolder');
@@ -23,16 +20,14 @@ class AndroidFolderPicker {
     }
   }
 
-  /// Copies the picked tree's media files into [destDir]. Progress frames from
-  /// Kotlin are forwarded to [onProgress] while the copy is running.
+  /// Copy media files into [destDir], forwarding progress frames.
   static Future<Map<String, dynamic>> import(
     String uri,
     String destDir, {
     void Function(Map<String, dynamic>)? onProgress,
   }) => _copyTree('importFolder', uri, destDir, onProgress: onProgress);
 
-  /// Copies exported `.json` documents from a SAF tree into app-private
-  /// storage. Returns the list of copied paths for `Store.addJsonFiles`.
+  /// Copy JSON files into [destDir] and return their paths.
   static Future<Map<String, dynamic>> importJson(
     String uri,
     String destDir, {
@@ -73,8 +68,7 @@ class AndroidFolderPicker {
     }
   }
 
-  /// Opens a web link in the user's browser. Local files are not shared with
-  /// other apps: they stay inside Indexed's private storage on Android.
+  /// Open web links in the browser; local files stay app-private on Android.
   static Future<bool> openLink(String url) async {
     try {
       return await _channel.invokeMethod<bool>('openLink', {'url': url}) ??
@@ -93,11 +87,9 @@ class AndroidFolderPicker {
     }
   }
 
-  /// Stable short name for a tree URI, so re-picking the same folder reuses
-  /// the already imported files instead of duplicating them.
+  /// Stable short tree-URI name so re-picking a folder does not duplicate files.
   static String folderNameFor(String uri) {
-    // Providers sometimes differ only in the case of percent escapes. Normalize
-    // those without decoding separators, which could merge distinct folders.
+    // Normalize percent-escape case without decoding separators.
     final canonical = uri.replaceAllMapped(
       RegExp(r'%[0-9a-fA-F]{2}'),
       (m) => m.group(0)!.toUpperCase(),
@@ -106,9 +98,7 @@ class AndroidFolderPicker {
   }
 }
 
-/// Writes a locally built archive into an Android SAF folder. This keeps the
-/// ZIP off the method channel: even a large conversation pack is streamed by
-/// native code straight into the folder the user picked.
+/// Stream a ZIP straight to SAF storage instead of over the method channel.
 class AndroidMediaExport {
   static const MethodChannel _channel = MethodChannel(
     'dev.local.indexed/export',
@@ -117,8 +107,7 @@ class AndroidMediaExport {
       <String, void Function(Map<String, dynamic>)>{};
   static bool _listening = false;
 
-  /// One channel handler serves every export. Clearing the handler when one
-  /// export finishes would silently drop progress for any later export.
+  /// Keep one export channel handler so later exports still receive progress.
   static void _ensureListener() {
     if (_listening) return;
     _listening = true;

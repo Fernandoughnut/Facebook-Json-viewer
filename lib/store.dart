@@ -65,8 +65,7 @@ class GlobalHit {
   const GlobalHit(this.chat, this.msg);
 }
 
-/// Maximum number of hits kept by global search. The screen shows a "+" when
-/// [GlobalSearchResult.truncated] is true instead of pretending it counted all.
+/// Maximum hits kept by global search; results report truncation past this.
 const int globalSearchLimit = 20000;
 
 typedef GlobalSearchResult = ({List<GlobalHit> hits, bool truncated});
@@ -81,12 +80,10 @@ class Store extends ChangeNotifier {
 
   final Map<String, Chat> chats = {};
 
-  /// JSON files already added in this session. Re-picking one must not append
-  /// its messages a second time (the saved path list alone cannot prevent that).
+  /// JSON files already added this session, so re-picking one cannot append duplicates.
   final Set<String> _loadedPaths = {};
 
-  /// Folders used by every conversation. The export's file names are random IDs, so a folder
-  /// is only a lookup table from "name written in the JSON" to the real file on disk.
+  /// Shared media folders map export filenames to files on disk.
   final List<MediaDir> sharedDirs = [];
 
   /// Bumped whenever any media folder is added or removed, so views know to refresh photos.
@@ -95,19 +92,16 @@ class Store extends ChangeNotifier {
   /// Bumped when loaded messages change, so expensive derived views can cache.
   int dataRevision = 0;
 
-  /// Bumped when bookmarks change, so lightweight counters can refresh without
-  /// rerunning analysis of every message.
+  /// Bumped when bookmarks change, for lightweight counter refreshes.
   int bookmarkRevision = 0;
 
-  /// Which JSON paths contributed each chat key. Lets us drop a remembered
-  /// file once every conversation it contained has been removed from the app.
+  /// JSON paths that contributed each chat key, so removed files can be forgotten.
   final Map<String, Set<String>> _pathsForChat = {};
 
   /// Original message -> the messages that reply to it (for "Show replies").
   final Map<Msg, List<Msg>> _replyIndex = {};
 
-  /// Stats depend only on the messages and the media folders, not on status or
-  /// bookmarks. Avoid rescanning every message whenever a list rebuilds.
+  /// Stats depend only on messages and media folders, not bookmarks or status.
   final Map<String, MediaStats> _mediaStats = {};
 
   String me = '';
@@ -119,11 +113,8 @@ class Store extends ChangeNotifier {
   List<Chat> get sortedChats =>
       chats.values.toList()..sort((a, b) => b.lastT.compareTo(a.lastT));
 
-  /// Search every loaded conversation. Query is case-insensitive and covers
-  /// text, both original and friendly sender names, links and media filenames.
-  /// An empty query returns nothing: global search is not a message browser.
-  /// Stops as soon as one result past [limit] is found so a broad query never
-  /// builds an unbounded list on the UI thread.
+  /// Case-insensitive global search over text, sender names, links and filenames.
+  /// Empty query returns nothing; it stops just past [limit] to avoid unbounded work.
   GlobalSearchResult searchAll(
     String query, {
     String? sender,
@@ -197,8 +188,7 @@ class Store extends ChangeNotifier {
     } catch (_) {}
     final base = key.split('/').last;
     final decodedBase = decodedKey?.split('/').last;
-    // Relative path first, then the old basename fallback. That makes
-    // `photos/a.jpg` and `videos/a.jpg` resolve to different files.
+    // Relative paths first, so same-named files in different folders stay distinct.
     final candidates = <String>{
       if (key.isNotEmpty) key,
       if (decodedKey != null && decodedKey.isNotEmpty) decodedKey,
@@ -213,9 +203,8 @@ class Store extends ChangeNotifier {
         if (direct != null && checked.add(direct) && _isMediaFile(direct)) {
           return direct;
         }
-        // An originalSorted pack keeps the relative folders under `media/`.
-        // The folder's tail index makes this a map lookup instead of a scan of
-        // every indexed path for every media reference.
+        // originalSorted packs keep relative folders under `media/`.
+        // A folder tail index turns lookups into map reads.
         if (candidate.contains('/')) {
           for (final path in d.suffixes[candidate] ?? const <String>[]) {
             if (checked.add(path) && _isMediaFile(path)) return path;
@@ -255,8 +244,7 @@ class Store extends ChangeNotifier {
   bool hasMedia([Chat? chat]) =>
       sharedDirs.isNotEmpty || (chat != null && chat.dirs.isNotEmpty);
 
-  /// Groups identical media files by size + SHA-256. Hashing and streaming
-  /// happen in an isolate so the chat stays responsive.
+  /// Groups identical media by size + SHA-256 in an isolate.
   Future<Map<String, List<String>>> duplicateMedia() async {
     final paths = <String>{};
     for (final c in chats.values) {
@@ -293,16 +281,14 @@ class Store extends ChangeNotifier {
     }
     final stats = MediaStats(total, fromChat, fromShared, missing, sample);
     _mediaStats[key] = stats;
-    // Folder versions and message counts change over time; keep only a bounded
-    // window instead of retaining every old snapshot for the whole session.
+    // Keep only a bounded window of folder/message versions.
     if (_mediaStats.length > _maxMediaStatsEntries) {
       _mediaStats.remove(_mediaStats.keys.first);
     }
     return stats;
   }
 
-  /// Full list of missing media names for export. [MediaStats.missingSample]
-  /// is intentionally capped for dialogs; CSV exports must not be truncated.
+  /// Full missing-media list for CSV; [MediaStats.missingSample] is capped for dialogs.
   List<String> missingMediaNames(Chat chat) {
     final out = <String>[];
     for (final m in chat.messages) {
@@ -316,8 +302,7 @@ class Store extends ChangeNotifier {
 
   // ---- replies ----
 
-  /// Link every reply to the message it answers (by message ID, or by time + sender).
-  /// Returns how many messages in the conversation are replies.
+  /// Link replies by ID or time+sender; returns the reply count.
   int resolveReplies(Chat c) {
     final withReply = <Msg>[];
     for (final m in c.messages) {
@@ -345,9 +330,7 @@ class Store extends ChangeNotifier {
     return withReply.length;
   }
 
-  /// Rebuild the reply index after any change to the loaded conversations.
-  /// Removal is rare, so a full rebuild is cheaper than a stale index that
-  /// keeps removed messages (and their raw JSON) alive.
+  /// Rebuild after changes; a stale index would retain removed messages and raw JSON.
   int rebuildReplyIndex() {
     _replyIndex.clear();
     var count = 0;
@@ -434,17 +417,14 @@ class Store extends ChangeNotifier {
       ? 'id:${m.id}'
       : 'msg:${m.t}|${m.sender}|${m.text}|${m.media.map((x) => x.uri).join(',')}';
 
-  /// A compact identity for the long-lived dedupe index. Keeping whole text
-  /// strings here would retain a second copy of every message during import.
+  /// Compact dedupe identity; full text would retain a second copy of each message.
   static int _dedupeHash(String chatKey, Msg m) =>
       Object.hash(chatKey, dedupeKey(m));
 
-  /// Android's file picker copies picks into the app cache, which can be wiped
-  /// between runs. Keep a durable copy for anything we decide to remember.
+  /// Android cache picks are wiped between runs, so remembered files get durable copies.
   Future<String> _persistJsonPath(String path) async {
     if (!Platform.isAndroid) return path;
-    // A SAF import and this method both live under importDir. Never re-copy a
-    // durable app-private file into the flat imports folder on restore.
+    // SAF imports already live under importDir; do not re-copy them on restore.
     if (path.startsWith('${settings.importDir}${Platform.pathSeparator}')) {
       return path;
     }
@@ -457,8 +437,7 @@ class Store extends ChangeNotifier {
     final name = clean.isEmpty ? 'import.json' : clean;
     var target = File('${dir.path}${Platform.pathSeparator}$name');
     if (await target.exists()) {
-      // Reuse an unchanged copy instead of duplicating every restore. Size
-      // alone is not enough: two exports can share a size after an edit.
+      // Reuse unchanged files on restore, but compare more than size.
       final srcStat = await src.stat();
       final targetStat = await target.stat();
       if (targetStat.size == srcStat.size &&
@@ -480,9 +459,8 @@ class Store extends ChangeNotifier {
     bool remember = true,
     bool reviveRemoved = false,
 
-    /// Set false when [paths] are already durable app-private files (Android
-    /// SAF JSON imports), so nested folders keep their names and are not copied
-    /// a second time into the flat `imports/` directory.
+    /// False for durable Android SAF JSON files, preserving nested names.
+    /// They are not copied again into flat `imports/`.
     bool persist = true,
   }) async {
     var added = 0;
@@ -505,15 +483,12 @@ class Store extends ChangeNotifier {
       for (final picked in paths) {
         final path = persist ? await _persistJsonPath(picked) : picked;
         final name = path.split(pathSep).last;
-        // An explicit re-add must be re-read even if another chat from the
-        // same file is still loaded; the per-thread guard below prevents
-        // duplicate messages.
+        // Explicit re-adds bypass the session guard; per-thread checks still apply.
         if (!reviveRemoved && _loadedPaths.contains(path)) continue;
         status = 'Reading $name…';
         notifyListeners();
         try {
-          // Parsing runs in a background isolate so the window never freezes.
-          // The first launch parses the export; later launches read the cache.
+          // Parse in an isolate; first launch parses, later launches read the cache.
           final threads = await parseInBackground(
             path,
             cacheDir: settings.useParseCache ? settings.cacheDir : null,
@@ -532,8 +507,7 @@ class Store extends ChangeNotifier {
               continue;
             }
             if (wasRemoved) settings.removedChats.remove(t.key);
-            // A thread already loaded from this exact file is still an active
-            // owner: keep the file remembered, but do not merge it twice.
+            // A loaded thread stays remembered but is not merged twice.
             activeKeys.add(t.key);
             if (!wasRemoved &&
                 (_pathsForChat[t.key]?.contains(path) ?? false)) {
@@ -555,16 +529,14 @@ class Store extends ChangeNotifier {
               added++;
             }
           }
-          // A file whose only conversations were removed must not be reopened
-          // on every startup, nor block re-adding it later in this session.
+          // A file with only removed chats must not reopen at startup or block re-add.
           if (activeKeys.isNotEmpty) {
             _loadedPaths.add(path);
             if (remember && !settings.jsonPaths.contains(path)) {
               settings.jsonPaths.add(path);
             }
           } else {
-            // Even during restore (remember: false), a file whose only
-            // conversations are removed must not be retried every startup.
+            // Restore also skips files whose only chats were removed.
             prunedRememberedPath |= settings.jsonPaths.remove(path);
             _loadedPaths.remove(path);
           }
@@ -575,9 +547,7 @@ class Store extends ChangeNotifier {
     } finally {
       _busy--;
     }
-    // Only chats that actually received messages can have become unsorted.
-    // Re-picking a fully duplicated export still updates the remembered path,
-    // but must not invalidate the reply index or every cached insight.
+    // Only newly loaded chats can be unsorted; duplicated re-picks must not invalidate caches.
     var replies = 0;
     if (added > 0) {
       for (final key in touched) {
@@ -597,8 +567,7 @@ class Store extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Open a media folder. With [chat] it belongs to that conversation only;
-  /// without it, the folder is shared by every conversation.
+  /// Open a media folder, shared unless [chat] is given.
   static bool _sameMap(Map<String, String> a, Map<String, String> b) {
     if (a.length != b.length) return false;
     for (final e in a.entries) {
@@ -632,8 +601,7 @@ class Store extends ChangeNotifier {
     final previous = list.where((d) => d.path == dir);
     var unchanged = false;
     for (final d in previous) {
-      // Re-picking the same folder must not invalidate media stats and the
-      // gallery: on a large chat that is a full O(messages) rescan.
+      // Re-picking an unchanged folder avoids a full O(messages) rescan.
       unchanged = _sameFileMap(d, MediaDir(dir, index.files, index.paths));
       break;
     }

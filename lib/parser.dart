@@ -1,9 +1,5 @@
-// Tolerant parser for Facebook / Messenger JSON exports, including the
-// end-to-end encrypted ones. It does not rely on one fixed layout: it looks
-// for lists of objects that "look like messages" and maps common field names.
-//
-// Port of the logic in the HTML viewer. No Flutter imports, so it also runs
-// in a background isolate.
+// Tolerant parser for Facebook / Messenger JSON exports, including encrypted ones.
+// No Flutter imports, so it also runs in a background isolate.
 
 import 'dart:convert';
 import 'dart:io';
@@ -86,16 +82,14 @@ dynamic pick(dynamic o, List<String> keys) {
   return null;
 }
 
-/// Older Facebook exports store UTF-8 bytes as Latin-1 characters ("Ã©" instead of "é").
-/// Undo that when it is safe to do so.
+/// Repair UTF-8 bytes misread as Latin-1 when it is safe to do so.
 String fixEnc(String s) {
   final u = s.codeUnits;
   var needs = false;
   for (var i = 0; i < u.length; i++) {
     final c = u[i];
     if (c > 255) return s; // already real Unicode (emoji, CJK, ...)
-    // Only decode when a UTF-8 lead byte is followed by a continuation byte,
-    // so ordinary Latin-1 letters ("café", "¿qué?") are left alone.
+    // Decode only valid UTF-8 lead+continuation pairs; ordinary Latin-1 stays intact.
     if ((c == 0xC2 || c == 0xC3 || c == 0xE2 || c == 0xF0) &&
         i + 1 < u.length &&
         u[i + 1] >= 0x80 &&
@@ -190,8 +184,7 @@ String nameOf(dynamic x) {
   return fixEnc('$x');
 }
 
-/// Find out what a message replied to. Exports differ: the reply may be a nested object
-/// (with the original text/sender/time) or just the ID of the original message.
+/// Resolve a reply from a nested object or a bare original message ID.
 Reply? parseReply(Map m) {
   final rid = pick(m, replyIdKeys);
   final rv = pick(m, replyKeys);
@@ -279,9 +272,7 @@ Msg normMsg(Map m, {bool keepRaw = true}) {
     type: '${m['type'] ?? ''}',
     unsent:
         m['is_unsent'] == true || m['isUnsent'] == true || m['unsent'] == true,
-    // Keeping every original map costs a lot of RAM on 80k+ message exports.
-    // "Message details" and raw export still work when this is turned off,
-    // they simply show that the original data was not kept.
+    // Dropping raw maps saves large amounts of RAM; details/raw export then omit them.
     raw: keepRaw ? m : const {},
   );
 }
@@ -339,8 +330,7 @@ Future<List<ParsedThread>> parseInBackground(
   ),
 );
 
-/// Both indexes are returned together so a folder scan can be streamed from
-/// the isolate once instead of walking the tree twice.
+/// Return both indexes so a folder scan runs once through the isolate.
 typedef MediaDirIndex = ({
   Map<String, String> files,
   Map<String, String> paths,
@@ -357,18 +347,13 @@ List<ParsedThread> parseFile(String path, {bool keepRaw = true}) {
 }
 
 // ---- Persistent parse cache ----
-//
-// Parsing tens of thousands of messages on every launch is slow. The cache
-// stores the normalized form in a flat, predictable JSON layout: decoding that
-// is much faster than decoding the original export and running the tolerant
-// field-detection code again. The source file's size and modified time are part
-// of the cache key, so editing or replacing the export invalidates it.
+// Normalized JSON decodes faster than the original export plus field detection.
+// Source size and modified time are part of the key, so edits invalidate it.
 
 /// Layout of the cached JSON itself. Bump when the encoder/decoder changes.
 const cacheFormatVersion = 1;
 
-/// Parsing behaviour. Bump whenever field detection, reply handling or
-/// normalization changes, even if the encoded layout stays the same.
+/// Bump when field detection, replies or normalization change.
 const parserVersion = 2;
 
 String _cacheHash(String source) {
@@ -442,8 +427,7 @@ Msg _decodeMsg(List l) => Msg(
   raw: l.length > 10 && l[10] is Map ? (l[10] as Map) : const {},
 );
 
-/// Write the cache incrementally. Building one enormous JSON string would
-/// temporarily hold a second copy of every message in the isolate's heap.
+/// Stream cache writes so the isolate never holds a second full copy.
 void _writeCacheFile(File file, List<ParsedThread> threads, bool keepRaw) {
   final raf = file.openSync(mode: FileMode.write);
   try {
@@ -492,8 +476,7 @@ List<ParsedThread> _decodeThreads(Object? value) {
   return out;
 }
 
-/// Remove cache files left behind by older parser versions or interrupted
-/// writes. Only the short header is read, so this stays cheap for large caches.
+/// Prune stale/interrupted caches by reading only their short headers.
 void pruneParseCache(String cacheDir) {
   final dir = Directory(cacheDir);
   if (!dir.existsSync()) return;
@@ -561,13 +544,11 @@ List<ParsedThread> parseFileCached(
   return threads;
 }
 
-/// Backwards-compatible basename index. Prefer [scanDirIndex] when the caller
-/// can keep the relative-path index too.
+/// Basename index kept for callers that do not need relative paths.
 Map<String, String> scanDir(String dir) => scanDirIndex(dir).files;
 
-/// Walk a folder once and build two lowercase indexes: basename -> full path,
-/// and relative path -> full path. The second index is what stops
-/// `photos/a.jpg` and `videos/a.jpg` from collapsing into one media file.
+/// Lowercase basename and relative-path indexes for a media folder.
+/// Relative paths keep same-named files in different folders distinct.
 MediaDirIndex scanDirIndex(String dir) {
   final files = <String, String>{};
   final paths = <String, String>{};

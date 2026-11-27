@@ -1,9 +1,5 @@
-// User settings and the remembered session, stored in one small JSON file.
-//
-// Linux: $XDG_CONFIG_HOME/fb_viewer/state.json (usually ~/.config/fb_viewer/state.json).
-// Android: the app-private documents directory, so state survives restarts but is
-// removed when the app is uninstalled. Imported JSON and copied media live in
-// sibling folders there, not in Android's temporary cache.
+// User settings and remembered session in one JSON file.
+// Linux: ~/.config/fb_viewer/state.json; Android: app-private storage.
 
 import 'dart:async';
 import 'dart:convert';
@@ -161,13 +157,10 @@ class AppSettings extends ChangeNotifier {
   String me = '';
   String lastChat = '';
 
-  /// Appearance changes only need the root MaterialApp to rebuild. Keeping them
-  /// separate stops theme/accent/text-size changes from rebuilding chat state.
+  /// Appearance-only changes rebuild the root theme, not chat state.
   final ChangeNotifier appearance = ChangeNotifier();
 
-  /// Incremented on every general notification. Stateful views use this to
-  /// refresh derived data (for example search hits after an alias is renamed)
-  /// without being rebuilt from scratch for appearance-only changes.
+  /// Incremented on general notifications so derived views can refresh cheaply.
   int revision = 0;
 
   Timer? _timer;
@@ -186,8 +179,7 @@ class AppSettings extends ChangeNotifier {
   String get logPath => '$dir/error.log';
   String get cacheDir => '$dir/cache';
 
-  /// App-private root for durable imports/media on Android. On desktop it stays
-  /// equal to [dir], so existing Linux paths are unchanged.
+  /// App-private root for durable Android imports; equals [dir] on desktop.
   String get dataDir => _dataDir ?? dir;
   String get importDir => '$dataDir/imports';
   String get mediaDir => '$dataDir/media';
@@ -444,8 +436,7 @@ class AppSettings extends ChangeNotifier {
     activityRailDefaultApplied =
         j['activityRailDefaultApplied'] as bool? ?? activityRailDefaultApplied;
     if (!activityRailDefaultApplied) {
-      // Older state files explicitly stored the old on-by-default value. Turn
-      // it off once, then respect whatever the user chooses afterwards.
+      // One-time migration turns the old activity-rail default off.
       if (j['showActivityRail'] == true) showActivityRail = false;
       activityRailDefaultApplied = true;
       _writeAfterLoad = true;
@@ -592,13 +583,10 @@ class AppSettings extends ChangeNotifier {
 
   Future<void> _writeNow() async {
     try {
-      // state.json is small, so the synchronous write normally finishes before
-      // Android can kill a backgrounded process. Lifecycle callbacks cannot
-      // await async writes; a crash can still lose the very last change.
+      // Synchronous writes survive Android background kills; a crash can lose the last change.
       final f = File(filePath);
       f.parent.createSync(recursive: true);
-      // Write to a temporary file first: a crash mid-write must not leave a
-      // half-written state.json that looks like default settings on next run.
+      // Write via a temp file so a crash cannot leave a half-written state.
       final tmp = File('${f.path}.tmp');
       tmp.writeAsStringSync(
         const JsonEncoder.withIndent('  ').convert(toJson()),
@@ -614,8 +602,7 @@ class AppSettings extends ChangeNotifier {
     super.notifyListeners();
   }
 
-  /// Change a setting, refresh the UI and save.
-  /// [appearanceOnly] limits the rebuild to the root theme/text-scaler widget.
+  /// Change a setting, notify and save; [appearanceOnly] limits the rebuild.
   void update(void Function() change, {bool appearanceOnly = false}) {
     change();
     if (appearanceOnly) {
@@ -655,8 +642,7 @@ class AppSettings extends ChangeNotifier {
   void deletePreset(String name) =>
       update(() => presets.removeWhere((p) => p.name == name));
 
-  /// The PIN is stored only as a salted hash, never in plain text. This is a
-  /// convenient local gate for a shared desktop, not encryption of the export.
+  /// Salted PIN hash only; a local convenience gate, not encryption.
   bool pinMatches(String pin) {
     if (!lockEnabled || lockHash.isEmpty || lockSalt.isEmpty) return true;
     final hash = sha256.convert(utf8.encode('$lockSalt|$pin')).toString();
@@ -677,8 +663,7 @@ class AppSettings extends ChangeNotifier {
     lockSalt = '';
   });
 
-  /// Removes the local gate for someone who forgot their PIN. The UI must ask
-  /// for confirmation first; this never encrypts or changes the export files.
+  /// Remove the PIN gate after UI confirmation; exports are untouched.
   Future<void> resetPin() async {
     disableLock();
     await flush();
@@ -730,8 +715,7 @@ class AppSettings extends ChangeNotifier {
     _appendLog('${DateTime.now().toIso8601String()}\n$text\n');
   }
 
-  /// Record the last user action synchronously. Native aborts bypass Dart's
-  /// error handlers, so this breadcrumb is often all that survives a crash.
+  /// Write breadcrumbs synchronously; native aborts often leave only this log.
   void logBreadcrumb(String text) {
     _appendLog('${DateTime.now().toIso8601String()} [breadcrumb] $text');
   }

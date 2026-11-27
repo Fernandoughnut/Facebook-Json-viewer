@@ -57,8 +57,7 @@ class Msg {
   /// The message this one replies to, once found in the conversation (set after loading).
   Msg? replyTarget;
 
-  /// Lower-case search fields, made on first use so a 20k-message export does
-  /// not allocate several extra strings while parsing.
+  /// Lower-case search fields created on first use to avoid extra strings.
   late final String lower = text.toLowerCase();
   late final String lowerSender = sender.toLowerCase();
   late final String lowerShare = share.toLowerCase();
@@ -95,8 +94,7 @@ class MediaDir {
   final String path;
   final Map<String, String> files; // lowercase file name -> full path
 
-  /// Lowercase relative path (for example `photos/a.jpg`) -> full path. This
-  /// keeps two different files with the same file name distinguishable.
+  /// Lowercase relative path -> full path, keeping same-named files distinct.
   final Map<String, String> paths;
 
   MediaDir(this.path, this.files, [Map<String, String>? paths])
@@ -104,13 +102,9 @@ class MediaDir {
 
   Map<String, List<String>>? _suffixes;
 
-  /// Relative-path tails -> candidate paths, built once per folder.
-  ///
-  /// A URI from an exported conversation can carry extra leading folders (for
-  /// example `media/photos/a.jpg` after unpacking a media pack). Looking up
-  /// the tail in a prebuilt index avoids scanning every indexed file for every
-  /// media reference. Candidates keep the old shortest-key-first ordering so
-  /// a vanished file can still fall through to the next match.
+  /// Prebuilt relative-path tails -> candidate paths for export media URIs.
+  /// Tails may include extra leading folders, such as from an unpacked pack.
+  /// Shortest-key-first order lets a vanished file fall through to the next match.
   Map<String, List<String>> get suffixes {
     final existing = _suffixes;
     if (existing != null) return existing;

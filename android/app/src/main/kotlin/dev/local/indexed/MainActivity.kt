@@ -194,8 +194,7 @@ class MainActivity : FlutterActivity() {
                         Intent.FLAG_GRANT_READ_URI_PERMISSION,
                     )
                 } catch (_: SecurityException) {
-                    // Some providers do not allow persisting; the import below
-                    // still works for as long as this process is alive.
+                    // Some providers cannot persist; imports still work while the process lives.
                 }
                 result?.success(uri.toString())
             }
@@ -215,8 +214,7 @@ class MainActivity : FlutterActivity() {
                             Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
                     )
                 } catch (_: SecurityException) {
-                    // Some providers refuse persistence; the write below still
-                    // works while this process is alive.
+                    // Some providers refuse persistence; writes still work while the process lives.
                 }
                 result?.success(uri.toString())
             }
@@ -342,9 +340,8 @@ class MainActivity : FlutterActivity() {
             return
         }
 
-        // Listing and copying a few thousand SAF documents is far too slow for
-        // the main thread. One thread owns the listing; a small pool hides the
-        // per-file provider latency while copying into app-private storage.
+        // Listing/copying thousands of SAF documents is too slow for the main thread.
+        // One thread lists; a small pool hides per-file provider latency.
         Thread {
             val copied = AtomicInteger(0)
             val skipped = AtomicInteger(0)
@@ -424,9 +421,8 @@ class MainActivity : FlutterActivity() {
         }.start()
     }
 
-    /// Reads a SAF tree in one query per folder. DocumentFile's metadata
-    /// accessors each issue a provider query, which made 4,000-file folders
-    /// take minutes even when the bytes copied immediately.
+    /// Read a SAF tree with one query per folder.
+    /// DocumentFile metadata accessors were orders of magnitude slower.
     private fun queryChildren(
         treeUri: Uri,
         parentId: String,
@@ -501,8 +497,7 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    /// Imports exported JSON documents from an SAF tree. Re-picking a folder
-    /// refreshes the app-private copy; the user's original files are untouched.
+    /// Refresh the app-private JSON copy; the user's originals are untouched.
     private fun importJsonFolder(call: MethodCall, result: MethodChannel.Result) {
         val uriString = call.argument<String>("uri")
         val destPath = call.argument<String>("destDir")
@@ -591,9 +586,7 @@ class MainActivity : FlutterActivity() {
         copied: AtomicInteger,
         overwrite: Boolean = false,
     ): String? {
-        // Parent creation and collision-free naming must be atomic: several
-        // worker threads share one destination tree. The stream copy itself is
-        // deliberately outside the lock so SAF reads can overlap.
+        // Name allocation is atomic across workers; stream copies run outside the lock.
         val allocated = synchronized(nameLock) {
             val parent = if (source.relDir.isEmpty()) dest else File(dest, source.relDir)
             if (!parent.exists() && !parent.mkdirs()) {
@@ -619,8 +612,7 @@ class MainActivity : FlutterActivity() {
         val (parent, target) = allocated
         val name = target.name
 
-        // Size alone is not identity: an edited file of the same length must
-        // replace the old copy. Unknown source modified times force a copy.
+        // Size alone is not identity; unknown modified times force a copy.
         if (!overwrite &&
             source.size > 0 &&
             source.modified > 0 &&
@@ -637,8 +629,7 @@ class MainActivity : FlutterActivity() {
             skipped.incrementAndGet()
             return null
         }
-        // Write to a temporary file so a killed/ interrupted import can never
-        // leave a truncated file that looks complete on the next run.
+        // Copy via a temp file so interrupted imports never leave truncated files.
         val part = File(parent, "$name.part")
         try {
             input.use { sourceStream -> copyStream(sourceStream, part) }
@@ -676,8 +667,7 @@ class MainActivity : FlutterActivity() {
         return if (cleaned.isNullOrEmpty()) "media" else cleaned
     }
 
-    /// Sanitizing directory names can merge distinct source folders. Keep the
-    /// original name's hash so `Photos` and `Photos?` remain separate.
+    /// Hash the original directory name so sanitized collisions stay separate.
     private fun safeDirName(name: String?): String {
         val cleaned = safeName(name)
         val original = name?.trim().orEmpty()

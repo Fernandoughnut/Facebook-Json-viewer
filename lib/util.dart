@@ -25,8 +25,7 @@ String formatCount(int n) {
   return out.toString();
 }
 
-/// Position in [matches] of the next/previous match after [current].
-/// Returns -1 when there are no matches; wraps at both ends.
+/// Next/previous match position; -1 when none, wrapping at both ends.
 int nextMatchPosition(int? current, List<int> matches, int delta) {
   if (matches.isEmpty) return -1;
   var pos = current == null ? (delta > 0 ? -1 : 0) : matches.indexOf(current);
@@ -34,10 +33,8 @@ int nextMatchPosition(int? current, List<int> matches, int delta) {
   return (pos + delta + matches.length) % matches.length;
 }
 
-/// First index in reading order whose timestamp is at or after [target].
-/// Items are expected to be sorted by time; no allocation is needed. With
-/// [descending], the list is already newest-first, so "at or after" means the
-/// first timestamp <= target.
+/// First index in reading order at or after [target] in a time-sorted list.
+/// With [descending], the list is newest-first.
 int firstIndexAtOrAfter<T>(
   List<T> items,
   int target,
@@ -63,8 +60,7 @@ int firstIndexAtOrAfter<T>(
 const Color kHighlightColor = Color(0xFFFFC107); // Amber 500
 const Color kHighlightOnColor = Colors.black;
 
-/// Monospace text follows the theme's small body style instead of hardcoding
-/// one size in every JSON/code preview.
+/// Monospace text follows the theme's small body style.
 TextStyle monoStyle(BuildContext context) =>
     (Theme.of(context).textTheme.bodySmall ?? const TextStyle(fontSize: 12))
         .copyWith(fontFamily: 'monospace');
@@ -75,8 +71,7 @@ String fmtDate(int? t) {
   return '${d.year}-${two(d.month)}-${two(d.day)}';
 }
 
-/// Set once at startup so time formatting follows the "24-hour clock" setting
-/// without forcing the whole app to rebuild when only that setting changes.
+/// Set once at startup so time formatting follows the 24-hour setting.
 AppSettings? gSettings;
 
 String fmtTime(int? t) {
@@ -103,12 +98,10 @@ bool sameMinute(int? a, int? b) {
 /// Immersive mode reveals its overlay position bar only for fast scrolls.
 const double kFastScrollPxPerSecond = 900;
 
-/// Scroll notifications can be sparse during a fling, so velocity is measured
-/// over a short window rather than between adjacent frames.
+/// Measure velocity over a short window because fling notifications are sparse.
 const Duration kFastScrollWindow = Duration(milliseconds: 200);
 
-/// The position bar should not flash for a quick flick: the fast scrolling has
-/// to last this long before it is revealed.
+/// Require sustained fast scrolling before revealing the position bar.
 const Duration kFastScrollHold = Duration(milliseconds: 400);
 
 bool isFastScroll(double deltaPx, int elapsedMs) {
@@ -116,8 +109,7 @@ bool isFastScroll(double deltaPx, int elapsedMs) {
   return (deltaPx.abs() * 1000) / elapsedMs >= kFastScrollPxPerSecond;
 }
 
-/// Tracks scroll velocity without depending on Flutter widgets, so the
-/// immersive reveal rule can be tested directly.
+/// Tracks scroll velocity without Flutter widgets so the rule is testable.
 class FastScrollTracker {
   FastScrollTracker({
     this.window = kFastScrollWindow,
@@ -131,8 +123,7 @@ class FastScrollTracker {
   int? _fastSince;
   bool _revealed = false;
 
-  /// Records one scroll update. Returns true only once per sustained fast
-  /// burst, when [hold] has elapsed and the bar should be revealed.
+  /// Returns true once per sustained fast burst, when [hold] has elapsed.
   bool update(int now, double pixels) {
     _samples.add((t: now, px: pixels));
     while (_samples.length > 1 &&
@@ -168,8 +159,7 @@ class FastScrollTracker {
   }
 }
 
-/// True when a scroll should dismiss the floating immersive controls. An open
-/// menu must keep them mounted, otherwise the menu's own owner disappears.
+/// A scroll dismisses floating controls unless an open menu is active.
 bool shouldAutoHideImmersiveControls({
   required bool enabled,
   required bool menuOpen,
@@ -202,7 +192,7 @@ bool messageMatches(Msg m, String q, {String? sender, bool mediaOnly = false}) {
       m.lowerMediaNames.any((name) => name.contains(lq));
 }
 
-/// True for HTTP(S) links, which open in the browser instead of a local player.
+/// HTTP(S) links open in the browser; local media playback stays Linux-only.
 bool isWebLink(String value) {
   final uri = Uri.tryParse(value.trim());
   return uri != null && (uri.scheme == 'http' || uri.scheme == 'https');
@@ -257,9 +247,7 @@ Future<void> openExternal(String target, BuildContext context) async {
   }
 }
 
-/// Ask for a folder. On desktop this returns the folder directly. On Android,
-/// SAF folder handles are content:// URIs that dart:io cannot walk, so the
-/// native side streams the folder's media into app-private storage first.
+/// Android SAF trees are copied into app-private storage because dart:io cannot walk them.
 Future<String?> pickFolder(Store store, {NavigatorState? navigator}) async {
   if (Platform.isAndroid) {
     final uri = await AndroidFolderPicker.pick();
@@ -270,8 +258,7 @@ Future<String?> pickFolder(Store store, {NavigatorState? navigator}) async {
     );
     await dir.create(recursive: true);
 
-    // Streaming thousands of SAF documents takes real time. Show what is
-    // happening instead of leaving the app looking frozen.
+    // Show progress so a large SAF import does not look frozen.
     final progress = ValueNotifier<Map<String, dynamic>>(
       const <String, dynamic>{},
     );
@@ -426,8 +413,7 @@ List<InlineSpan> highlightSpans(
   if (q.isEmpty) return [TextSpan(text: text, style: base)];
   final lt = caseSensitive ? text : text.toLowerCase();
   final lq = caseSensitive ? q : q.toLowerCase();
-  // Odd Unicode can change the length when lowercased; slicing by the original
-  // query length would then cut the wrong characters.
+  // Lowercasing Unicode can change length; slice using the original offsets.
   if (!caseSensitive && (lt.length != text.length || lq.length != q.length)) {
     return [TextSpan(text: text, style: base)];
   }

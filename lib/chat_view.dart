@@ -72,11 +72,8 @@ class _BucketBuilder {
   _BucketBuilder(this.t, this.label);
 }
 
-/// Flutter adds a pixel-based scrollbar to every scrollable on Linux. That is
-/// dangerous for a conversation with tens of thousands of variable-height
-/// bubbles: dragging the thumb makes the sliver lay out every earlier message
-/// just to find the offset, which can freeze or abort the process. The chat
-/// uses [_IndexScrollbar] and the activity rail, both of which jump by index.
+/// Linux pixel scrollbars can force layout of every earlier bubble.
+/// This chat uses index-based [_IndexScrollbar] and the activity rail instead.
 class _NoDesktopScrollbar extends ScrollBehavior {
   const _NoDesktopScrollbar();
 
@@ -88,10 +85,8 @@ class _NoDesktopScrollbar extends ScrollBehavior {
   ) => child;
 }
 
-/// A scrollbar that maps dragging to message *indices*, not pixel offsets.
-/// The chat list has variable-height bubbles, so a pixel scrollbar would make
-/// the sliver lay out every earlier message to find the offset. This one jumps
-/// straight to an index and lets the list rebuild around that item only.
+/// A scrollbar that maps dragging to message indices, not pixel offsets.
+/// It jumps straight to an index so only that area needs rebuilding.
 class _IndexScrollbar extends StatefulWidget {
   const _IndexScrollbar({
     required this.itemCount,
@@ -112,14 +107,10 @@ class _IndexScrollbar extends StatefulWidget {
 }
 
 class _IndexScrollbarState extends State<_IndexScrollbar> {
-  /// Rebuilding the 80k-item list on every pointer event is what makes a drag
-  /// feel frozen. The thumb follows the pointer locally; actual jumps are
-  /// throttled and a final jump is issued when the drag ends.
+  /// The thumb follows the pointer locally; jumps are throttled until release.
   static const _jumpInterval = Duration(milliseconds: 180);
 
-  /// Fixed track used only to convert a pointer's global Y into an index. The
-  /// gesture target itself is just the pill, so touching the empty track never
-  /// jumps or consumes a navigation gesture.
+  /// Fixed track converts global Y to an index; only the pill accepts gestures.
   final GlobalKey _trackKey = GlobalKey();
 
   int? _preview;
@@ -137,8 +128,7 @@ class _IndexScrollbarState extends State<_IndexScrollbar> {
     super.dispose();
   }
 
-  /// The thumb stays under the finger until the list reports that it caught
-  /// up. Clearing it on release makes it visibly snap back before the jump.
+  /// The thumb stays under the finger until the list catches up.
   void _schedulePreviewClear(int idx) {
     if (_clearScheduled) return;
     _clearScheduled = true;
@@ -165,8 +155,7 @@ class _IndexScrollbarState extends State<_IndexScrollbar> {
     );
   }
 
-  /// Convert a pointer position to a Y inside the fixed track. The pill moves
-  /// while dragging, so using its own local coordinates would drift.
+  /// Convert pointer Y in the fixed track; the moving pill would drift.
   double? _trackDy(Offset global) {
     final context = _trackKey.currentContext;
     if (context == null) return null;
@@ -227,9 +216,7 @@ class _IndexScrollbarState extends State<_IndexScrollbar> {
           return LayoutBuilder(
             builder: (context, box) {
               final height = box.maxHeight;
-              // A long pill is easier to catch than a hairline thumb. Keep it
-              // proportional for short chats, but never shrink it to a speck on
-              // huge variable-height conversations.
+              // Keep the pill easy to catch without shrinking it to a speck on huge chats.
               final minThumb = widget.immersive ? 64.0 : 48.0;
               final proportional =
                   height * visible / math.max(1, widget.itemCount);
@@ -248,9 +235,7 @@ class _IndexScrollbarState extends State<_IndexScrollbar> {
                   ? 0.0
                   : (position / maxTop).clamp(0.0, 1.0);
               final thumbTop = progress * math.max(0.0, height - thumbHeight);
-              // Keep the hit box the same narrow width as the visible pill.
-              // The empty track and the parent's edge inset pass straight
-              // through to Android gesture navigation.
+              // Keep the hit box narrow so Android edge gestures pass through.
               final pill = widget.immersive ? 7.0 : 6.0;
               return SizedBox(
                 key: _trackKey,
@@ -327,8 +312,7 @@ class _ChatViewState extends State<ChatView> {
   final MenuController _menuController = MenuController();
   final ScrollController _resultsController = ScrollController();
 
-  // A fresh controller is made every time the list is rebuilt from scratch: a scroll
-  // controller can only belong to one list at a time.
+  // A fresh controller is needed when the list is rebuilt from scratch.
   ItemScrollController scroll = ItemScrollController();
   ItemPositionsListener positions = ItemPositionsListener.create();
 
@@ -337,8 +321,7 @@ class _ChatViewState extends State<ChatView> {
   bool gallery = false;
   SortMode sort = SortMode.oldest;
 
-  /// Results panel mode (optional). Off: typing in the search box filters the chat in place.
-  /// On: the chat stays complete, matches are listed in a panel, and clicking one jumps to it.
+  /// Off filters in place; On lists matches in a panel and jumps to a pick.
   bool panelMode = false;
   bool resultsOpen =
       false; // narrow screens only: the panel replaces the chat while true
@@ -385,8 +368,7 @@ class _ChatViewState extends State<ChatView> {
   /// Whether the search/filter header is collapsed into its slim strip.
   final ValueNotifier<bool> _topBarHidden = ValueNotifier(false);
 
-  /// Immersive mode keeps the overlay position bar hidden until a sustained
-  /// fast scroll, and detaches the search controls from the layout entirely.
+  /// Immersive mode hides the position bar until a sustained fast scroll.
   final ValueNotifier<bool> _immersiveBarVisible = ValueNotifier(false);
   final ValueNotifier<bool> _immersiveControlsVisible = ValueNotifier(true);
   bool _immersiveSearchExpanded = false;
@@ -466,8 +448,7 @@ class _ChatViewState extends State<ChatView> {
     }
     if (_settingsRevision != settings.revision) {
       _settingsRevision = settings.revision;
-      // Only aliases can change which messages match. Other setting changes
-      // (theme, sliders, rail visibility) must not re-sort a 20k-message view.
+      // Only aliases can change matches; other settings must not re-sort the view.
       final aliases = _aliasesForMatching();
       if (aliases != _aliasSignature) {
         _aliasSignature = aliases;
@@ -476,8 +457,7 @@ class _ChatViewState extends State<ChatView> {
       _pics = null; // captions use display names, even without a query
     }
     if (oldWidget.initialTarget != widget.initialTarget) {
-      // Two hits can share a timestamp, so the widget is reused and only its
-      // target changes. Schedule the new jump explicitly.
+      // Hits can share a timestamp, so schedule the new jump explicitly.
       _pendingJump = _findTargetIndex();
       _jumpScheduled = false;
     }
@@ -575,8 +555,7 @@ class _ChatViewState extends State<ChatView> {
     return messageMatches(m, q);
   }
 
-  /// Literal queries highlight as typed; regex queries highlight only the
-  /// substring that matched this message's text (never a sender/file match).
+  /// Regex highlights only the substring matching this message's text.
   String _highlightFor(Msg m) {
     if (!useRegex) return query;
     return _compiledRegex?.firstMatch(m.text)?.group(0) ?? '';
@@ -607,14 +586,12 @@ class _ChatViewState extends State<ChatView> {
         return true;
       }).toList();
       view = _sorted(list);
-      // A saved position is only used for "Where I left off"; "Oldest" and
-      // "Newest" must always open at the corresponding end of the conversation.
+      // Saved positions apply only to "Where I left off".
       _restoreIndex = settings.startAt == StartAt.leftOff
           ? _findRestore()
           : null;
       _railBucket.value = -1;
-      // A reversed list shows the newest message first, so its chronological
-      // top index is the last item until positions are reported.
+      // In a reversed list the chronological top is the last item.
       _scrollTop.value = _restoreIndex ?? (_reversed ? view.length - 1 : 0);
       _visibleCount.value = 10;
       _newList();
@@ -667,8 +644,7 @@ class _ChatViewState extends State<ChatView> {
     }
   }
 
-  /// Put each reply directly after the message it answers. Replies to replies
-  /// are included recursively; broken reply links leave the message in place.
+  /// Put replies after their original; broken links leave them in place.
   List<Msg> _threaded(List<Msg> l) {
     final inList = l.toSet();
     final out = <Msg>[];
@@ -693,8 +669,7 @@ class _ChatViewState extends State<ChatView> {
 
   /// The saved reading position as an index into [view].
   int? _findRestore() {
-    // Read the saved position every time: filters/search can rebuild the view
-    // after the chat opened, and scrolling may have saved a newer position.
+    // Re-read the saved position after any view rebuild.
     final t = settings.chatPos[widget.chat.key];
     if (t == null || !dateSort || view.isEmpty) return null;
     final descending = sort == SortMode.newest;
@@ -738,14 +713,11 @@ class _ChatViewState extends State<ChatView> {
     // Middle of the visible range: the date the reader is actually looking at.
     final mid = view[(top + (bottom ?? top)) ~/ 2].t;
     if (_centerTime.value != mid) _centerTime.value = mid;
-    // _scrollTop is the oldest visible index (used by the index scrollbar),
-    // but the message at the visual top is the newest one in a reversed or
-    // newest-first view. That is the timestamp worth highlighting/restoring.
+    // _scrollTop is the oldest index; the visual top may be the newest message.
     final visualTop = (_reversed || sort == SortMode.newest) ? bottom : top;
     final t = view[visualTop ?? top].t;
     if (t == null) return;
-    // Keep the activity rail's highlight in step with ordinary scrolling, but
-    // do not fight the thumb while the user is scrubbing the rail itself.
+    // Follow ordinary scrolling, but do not fight rail scrubbing.
     if (settings.showActivityRail && !_railDragging) {
       final label = _monthKey(t);
       final bucket = _activityBuckets().indexWhere((b) => b.label == label);
@@ -753,8 +725,7 @@ class _ChatViewState extends State<ChatView> {
         _railBucket.value = bucket;
       }
     }
-    // Only date-sorted views have a chronological position worth restoring;
-    // sorting by sender/length can put any timestamp at the top.
+    // Only date-sorted views have a chronological position to restore.
     if (!dateSort) return;
     if (_lastSavedPosT == t || settings.chatPos[widget.chat.key] == t) {
       _lastSavedPosT = t;
@@ -777,8 +748,7 @@ class _ChatViewState extends State<ChatView> {
     });
   }
 
-  /// The bar appears only after fast scrolling has lasted a while, so quick
-  /// flicks no longer flash it.
+  /// The bar appears only after sustained fast scrolling.
   void _trackFastScroll(int now, double pixels) {
     if (!settings.immersiveMode) {
       _fastScroll.reset();
@@ -787,8 +757,7 @@ class _ChatViewState extends State<ChatView> {
     if (_fastScroll.update(now, pixels)) _flashImmersiveBar();
   }
 
-  /// Keep the floating controls on screen while the reader is actively using
-  /// them, otherwise hide them after [delay].
+  /// Keep floating controls visible while in use; otherwise hide after [delay].
   void _scheduleImmersiveControlsHide([
     Duration delay = const Duration(seconds: 3),
   ]) {
@@ -806,8 +775,7 @@ class _ChatViewState extends State<ChatView> {
     });
   }
 
-  /// A scroll inside the overflow menu must never remove the widget that owns
-  /// that menu. Keep the controls pinned while it is open.
+  /// Keep controls pinned while the overflow menu is open.
   void _immersiveMenuOpened() {
     _immersiveMenuOpen = true;
     _immersiveControlsTimer?.cancel();
@@ -826,8 +794,7 @@ class _ChatViewState extends State<ChatView> {
     _scheduleImmersiveControlsHide();
   }
 
-  /// Brings search into view from a shortcut or menu action. In immersive mode
-  /// the field is not built until the floating controls are revealed.
+  /// Bring search into view; immersive builds the field when controls appear.
   void focusSearch() {
     if (settings.immersiveMode) {
       setState(() {
@@ -846,8 +813,7 @@ class _ChatViewState extends State<ChatView> {
 
   void _hideImmersiveControls() {
     _immersiveControlsTimer?.cancel();
-    // This is an explicit hide, so it must work even while the search field is
-    // focused. Auto-hide paths already guard against active input.
+    // Explicit hide works even while the search field is focused.
     searchFocus.unfocus();
     _immersiveControlsVisible.value = false;
     _immersiveSearchExpanded = false;
@@ -903,13 +869,11 @@ class _ChatViewState extends State<ChatView> {
       _fastScroll.reset();
     }
 
-    // Immersive detaches the header completely, so the auto-hide bookkeeping
-    // is unnecessary while it is active.
+    // Immersive detaches the header, so auto-hide bookkeeping is unnecessary.
     if (settings.immersiveMode) return false;
 
     if (!settings.autoHideTopBar) return false;
-    // The query and selection controls live in the header. Never collapse it
-    // while the reader is using them.
+    // Never collapse the header while its controls are in use.
     if (query.isNotEmpty || searchFocus.hasFocus || selecting) return false;
     final prev = _lastScrollPixels;
     _lastScrollPixels = pixels;
@@ -924,15 +888,13 @@ class _ChatViewState extends State<ChatView> {
     } else {
       return false;
     }
-    // Collapsing changes the viewport height, which moves the scroll position
-    // again. Ignore that echo so the header cannot oscillate.
+    // Ignore scroll echoes from collapsing so the header cannot oscillate.
     _ignoreScrollUntil = now + 250;
     _lastScrollPixels = null;
     return false;
   }
 
-  /// Slim replacement for the search/filter header. The people-filter eye
-  /// stays here so it is never hidden while scrolling.
+  /// Slim header replacement; the people-filter eye stays visible.
   Widget _compactTopBar() {
     final cs = Theme.of(context).colorScheme;
     final m3 = Theme.of(context).useMaterial3;
@@ -1072,9 +1034,7 @@ class _ChatViewState extends State<ChatView> {
     );
   }
 
-  /// Immersive controls float above the conversation instead of reserving
-  /// header space. They fade away while reading and return via the small
-  /// immersive button at the top-left.
+  /// Immersive controls float above the chat and fade while reading.
   Widget _immersiveOverlay({
     required Widget panelToggle,
     required Widget overflowMenu,
@@ -1327,8 +1287,7 @@ class _ChatViewState extends State<ChatView> {
       lastDate: DateTime(last.year, last.month, last.day),
     );
     if (picked == null || !mounted) return;
-    // showDatePicker returns midnight, so the first message at/after midnight
-    // is the first message on the chosen day. Adding a day skipped it.
+    // Midnight is the chosen day's first message; adding a day skipped it.
     final target = picked.millisecondsSinceEpoch;
     final idx = firstIndexAtOrAfter(view, target, (m) => m.t ?? 0);
     jumpToMessage(idx.clamp(0, view.length - 1).toInt());
@@ -2147,8 +2106,7 @@ class _ChatViewState extends State<ChatView> {
     );
   }
 
-  /// The two people selectors. They now live in their own window instead of
-  /// under the search box, so the chat header stays short on small screens.
+  /// People selectors live in their own dialog to keep the header short.
   List<Widget> _personFields(
     Store s,
     List<String> senders, {
@@ -2252,8 +2210,7 @@ class _ChatViewState extends State<ChatView> {
     ];
   }
 
-  /// Open the people filters in a separate dialog. The eye icon that opens it
-  /// is always present in the chat header, even while it is auto-hidden.
+  /// Open people filters from the always-present header eye icon.
   Future<void> openPeopleFilters() async {
     if (!mounted) return;
     _menuController.close();
@@ -2263,8 +2220,7 @@ class _ChatViewState extends State<ChatView> {
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDialogState) {
-          // Rebuild the selectors after a pick: the classic DropdownButton only
-          // shows its new value when its parent rebuilds it.
+          // Rebuild selectors after a pick so DropdownButton shows the new value.
           final fields = _personFields(
             s,
             senders,
@@ -2511,8 +2467,7 @@ class _ChatViewState extends State<ChatView> {
     }
     _railScrubIdx = idx;
     if (finish) {
-      // One full jump on release; dragging uses the lightweight scrub so it
-      // does not rebuild toolbars and restart the highlight timer per frame.
+      // Release performs one full jump; dragging uses the lightweight scrub.
       jumpToMessage(idx);
       _railScrubIdx = null;
       _railDragging = false;
@@ -2601,9 +2556,7 @@ class _ChatViewState extends State<ChatView> {
 
   // ---------- jumping around ----------
 
-  /// Step through search hits. In panel mode [results] holds the matching view
-  /// indices; in-place mode [view] already contains only matches. [delta] is
-  /// in visible order, so reversed layouts still move down on F3.
+  /// Step through hits in visible order, even in reversed layouts.
   void stepMatch(int delta) {
     if (query.isEmpty) return;
     final visibleDelta = panelMode
@@ -2618,8 +2571,7 @@ class _ChatViewState extends State<ChatView> {
       if (pos >= 0) jumpToMessage(results[pos]);
       return;
     }
-    // In-place search uses the view itself as the match list; wrapping can be
-    // done arithmetically instead of allocating an identity list of all rows.
+    // In-place search wraps arithmetically without allocating an identity list.
     final n = view.length;
     if (n == 0) return;
     var current = highlight;
@@ -2644,8 +2596,7 @@ class _ChatViewState extends State<ChatView> {
     });
   }
 
-  /// Queue an index-based jump. Rapid rail scrubs overwrite the previous
-  /// target, so at most one list rebuild happens per frame.
+  /// Queue an index jump; rapid scrubs overwrite it for one rebuild per frame.
   void _queueJump(int idx) {
     _queuedJump = idx;
     if (_queuedJumpScheduled) return;
@@ -2666,8 +2617,7 @@ class _ChatViewState extends State<ChatView> {
     });
   }
 
-  /// Lightweight scrub used by the scrollbar: move the list without rebuilding
-  /// toolbars or restarting the highlight timer on every drag update.
+  /// Move the list without rebuilding toolbars or resetting highlight timers.
   void scrubTo(int idx) => _queueJump(idx);
 
   /// Scroll the conversation to message [idx] (an index into [view]) and flash it.
@@ -2969,8 +2919,7 @@ class _ChatViewState extends State<ChatView> {
         final panelVisible = panelMode && query.isNotEmpty;
         final panelSide = panelVisible && _wide;
         final panelFull = panelVisible && !_wide && resultsOpen;
-        // Gallery and the full results panel have their own controls, so only
-        // the normal conversation view detaches its header into a float.
+        // Only the normal conversation view detaches its header.
         final immersiveOverlay =
             immersive && !gallery && !panelFull && view.isNotEmpty;
         final showPositionBar =
@@ -2996,8 +2945,7 @@ class _ChatViewState extends State<ChatView> {
             autofocus: true,
             child: Column(
               children: [
-                // Immersive mode removes the header from the layout entirely;
-                // its controls are a floating overlay inside the chat area.
+                // Immersive controls are a floating overlay inside the chat area.
                 if (!immersiveOverlay)
                   ValueListenableBuilder<bool>(
                     valueListenable: _topBarHidden,
@@ -3045,9 +2993,7 @@ class _ChatViewState extends State<ChatView> {
                 Expanded(
                   child: NotificationListener<ScrollNotification>(
                     onNotification: _onScrollNotification,
-                    // The same Row is always used, so the message list is never torn down just
-                    // because the results panel appears next to it. The position bar is an
-                    // overlay and never takes width from the conversation.
+                    // Reuse the Row so the results panel never tears down the message list.
                     child: Stack(
                       children: [
                         Row(
@@ -3134,8 +3080,7 @@ class _ChatViewState extends State<ChatView> {
     final q = query;
     final compact = settings.resultsLayout == ResultsLayout.compact;
     final newestFirst = settings.resultsNewestFirst;
-    // `results` follows the order of the chat; map the index instead of
-    // copying and reversing tens of thousands of entries on every rebuild.
+    // Map `results` indices instead of copying/reversing the whole list.
     final reverse = dateSort && ((sort == SortMode.oldest) == newestFirst);
     final cs = Theme.of(context).colorScheme;
     final muted = cs.outline;
@@ -3289,9 +3234,7 @@ class _ChatViewState extends State<ChatView> {
         reverse: rev,
         initialScrollIndex: initial,
         padding: const EdgeInsets.all(8),
-        // Bubbles hold no state worth keeping. Let the sliver recycle them as
-        // soon as they leave the cache extent instead of retaining every item
-        // visited during a long scroll.
+        // Bubbles hold no state worth keeping; let the sliver recycle them.
         addAutomaticKeepAlives: false,
         itemCount: n,
         itemBuilder: (context, i) {
@@ -3303,9 +3246,7 @@ class _ChatViewState extends State<ChatView> {
               !dateSort || prev == null || prev.sender != m.sender || newDay;
           final tight =
               dateSort && prev != null && !newDay && prev.sender == m.sender;
-          // Only the last message in a run from the same minute carries a
-          // timestamp. `view` stays chronological even when displayed in
-          // reverse, so the right message keeps its time either way.
+          // Only the last message in a same-minute run carries a timestamp.
           final showTime =
               !settings.groupTimesByMinute ||
               !dateSort ||
