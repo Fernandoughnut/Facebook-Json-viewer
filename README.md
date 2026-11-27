@@ -16,6 +16,7 @@ Available for **Linux** and **Android** (sideloaded APKs).
 3. Set **I am** to your name and add your media folder(s) so photos and videos show up inline.
 4. Search, filter, export, or pack a conversation's media.
 
+## Some screenshots
 
 <img width="1276" height="720" alt="1" src="https://github.com/user-attachments/assets/5512e173-9769-4011-8054-020cbedbba61" />
 <img width="1277" height="722" alt="2" src="https://github.com/user-attachments/assets/e16caf78-5bf6-4bb3-8466-7ef862f05153" />
