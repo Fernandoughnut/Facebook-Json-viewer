@@ -285,4 +285,56 @@ void main() {
       expect(reloaded.showActivityRail, isTrue);
     },
   );
+
+  test('corrupt state is preserved and logged before starting fresh', () async {
+    final dir = await Directory.systemTemp.createTemp(
+      'indexed_corrupt_state_test_',
+    );
+    addTearDown(() {
+      if (dir.existsSync()) dir.deleteSync(recursive: true);
+    });
+
+    final state = File('${dir.path}/state.json');
+    state.writeAsStringSync('{not json');
+
+    final settings = AppSettings(configDir: dir.path);
+    addTearDown(settings.dispose);
+    await settings.load();
+
+    final bad = dir
+        .listSync()
+        .where((e) => e.path.startsWith('${state.path}.bad-'))
+        .toList();
+    expect(bad, hasLength(1));
+    expect(File(bad.single.path).readAsStringSync(), '{not json');
+    expect(settings.readLog(), contains('Could not read state.json'));
+
+    settings.update(() => settings.me = 'Ana');
+    await settings.flush();
+    expect(jsonDecode(state.readAsStringSync())['me'], 'Ana');
+    expect(File('${state.path}.tmp').existsSync(), isFalse);
+  });
+
+  test('a saved state is replaced without a temp leftover', () async {
+    final dir = await Directory.systemTemp.createTemp(
+      'indexed_atomic_state_test_',
+    );
+    addTearDown(() {
+      if (dir.existsSync()) dir.deleteSync(recursive: true);
+    });
+
+    final settings = AppSettings(configDir: dir.path);
+    addTearDown(settings.dispose);
+    await settings.load();
+    settings.update(() => settings.me = 'Ana');
+    await settings.flush();
+
+    final state = File('${dir.path}/state.json');
+    expect(state.existsSync(), isTrue);
+    settings.update(() => settings.me = 'Ben');
+    await settings.flush();
+
+    expect(jsonDecode(state.readAsStringSync())['me'], 'Ben');
+    expect(File('${state.path}.tmp').existsSync(), isFalse);
+  });
 }

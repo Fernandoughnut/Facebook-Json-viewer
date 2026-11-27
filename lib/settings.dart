@@ -553,8 +553,20 @@ class AppSettings extends ChangeNotifier {
           await flush();
         }
       }
-    } catch (_) {
-      // a damaged or unreadable file just means default settings
+    } catch (e) {
+      // Keep the damaged file so a bad write can be inspected, then start fresh.
+      final f = File(filePath);
+      try {
+        if (f.existsSync()) {
+          final bad = File(
+            '${f.path}.bad-${DateTime.now().microsecondsSinceEpoch}',
+          );
+          f.renameSync(bad.path);
+          logError('Could not read state.json; preserved as ${bad.path}: $e');
+        }
+      } catch (_) {
+        logError('Could not read or preserve state.json: $e');
+      }
     }
   }
 
@@ -591,9 +603,14 @@ class AppSettings extends ChangeNotifier {
       tmp.writeAsStringSync(
         const JsonEncoder.withIndent('  ').convert(toJson()),
       );
-      if (f.existsSync()) f.deleteSync();
+      // Rename replaces the old state atomically on Linux and Android; a
+      // delete-then-rename would leave no settings file if the app were killed.
       tmp.renameSync(f.path);
-    } catch (_) {}
+    } catch (e) {
+      _appendLog(
+        '${DateTime.now().toIso8601String()} [settings] save failed: $e',
+      );
+    }
   }
 
   @override
