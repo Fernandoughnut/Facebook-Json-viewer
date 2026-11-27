@@ -4,6 +4,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.provider.DocumentsContract
 import androidx.documentfile.provider.DocumentFile
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -13,6 +14,9 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.InputStream
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 
 class MainActivity : FlutterActivity() {
     companion object {
@@ -28,10 +32,17 @@ class MainActivity : FlutterActivity() {
         )
         private val MEDIA_MIMES = listOf("image/", "video/", "audio/")
         private val INVALID_NAME = Regex("[\\\\/:*?\"<>|\\r\\n]")
+        private val DOCUMENT_COLUMNS = arrayOf(
+            DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+            DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+            DocumentsContract.Document.COLUMN_MIME_TYPE,
+            DocumentsContract.Document.COLUMN_SIZE,
+            DocumentsContract.Document.COLUMN_LAST_MODIFIED,
+        )
     }
 
     private data class Source(
-        val doc: DocumentFile,
+        val uri: Uri,
         val relDir: String,
         val name: String,
         val size: Long,
@@ -313,8 +324,13 @@ class MainActivity : FlutterActivity() {
             result.error("already_importing", "Another folder is still importing", null)
             return
         }
-        val tree = DocumentFile.fromTreeUri(this, Uri.parse(uriString))
-        if (tree == null) {
+        val treeUri = Uri.parse(uriString)
+        val rootId = try {
+            DocumentsContract.getTreeDocumentId(treeUri)
+        } catch (_: Exception) {
+            null
+        }
+        if (rootId == null) {
             clearImport(importId)
             result.error("bad_uri", "Could not open that folder", null)
             return
@@ -327,58 +343,75 @@ class MainActivity : FlutterActivity() {
         }
 
         // Listing and copying a few thousand SAF documents is far too slow for
-        // the main thread. One thread owns the whole import; progress is sent
-        // back over the same method channel.
+        // the main thread. One thread owns the listing; a small pool hides the
+        // per-file provider latency while copying into app-private storage.
         Thread {
-            val copied = intArrayOf(0)
-            val skipped = intArrayOf(0)
-            val buffer = ByteArray(BUFFER_SIZE)
+            val copied = AtomicInteger(0)
+            val skipped = AtomicInteger(0)
+            val used = HashMap<String, MutableSet<String>>()
+            val nameLock = Any()
+            val emitLock = Any()
             var lastEmit = 0L
 
             fun emit(phase: String, current: Int, total: Int, name: String?) {
-                val now = System.currentTimeMillis()
-                if (phase != "done" && now - lastEmit < 100 && current % 25 != 0) return
-                lastEmit = now
-                try {
-                    folderChannel?.invokeMethod(
-                        "importProgress",
-                        mapOf(
-                            "importId" to importId,
-                            "phase" to phase,
-                            "current" to current,
-                            "total" to total,
-                            "copied" to copied[0],
-                            "skipped" to skipped[0],
-                            "name" to name,
-                        ),
-                    )
-                } catch (_: Exception) {
-                    // A progress frame is never worth failing the import.
+                synchronized(emitLock) {
+                    val now = System.currentTimeMillis()
+                    if (phase != "done" && now - lastEmit < 100 && current % 25 != 0) return
+                    lastEmit = now
+                    try {
+                        folderChannel?.invokeMethod(
+                            "importProgress",
+                            mapOf(
+                                "importId" to importId,
+                                "phase" to phase,
+                                "current" to current,
+                                "total" to total,
+                                "copied" to copied.get(),
+                                "skipped" to skipped.get(),
+                                "name" to name,
+                            ),
+                        )
+                    } catch (_: Exception) {
+                        // A progress frame is never worth failing the import.
+                    }
                 }
             }
 
             try {
                 val sources = mutableListOf<Source>()
-                collect(tree, "", sources, importId)
+                queryChildren(treeUri, rootId, "", sources, importId, jsonOnly = false)
                 val total = sources.size
                 emit("listing", 0, total, null)
-                val used = HashMap<String, MutableSet<String>>()
-                for ((index, source) in sources.withIndex()) {
+
+                val done = AtomicInteger(0)
+                val pool = Executors.newFixedThreadPool(4)
+                for (source in sources) {
                     if (!isActive(importId)) break
-                    try {
-                        copyOne(source, dest, used, buffer, skipped, copied)
-                    } catch (_: Exception) {
-                        skipped[0]++
+                    pool.execute {
+                        if (!isActive(importId)) return@execute
+                        try {
+                            copyOne(source, dest, used, nameLock, skipped, copied)
+                        } catch (_: Exception) {
+                            skipped.incrementAndGet()
+                        } finally {
+                            emit("copying", done.incrementAndGet(), total, source.name)
+                        }
                     }
-                    emit("copying", index + 1, total, source.name)
+                }
+                if (!isActive(importId)) {
+                    pool.shutdownNow()
+                    pool.awaitTermination(10, TimeUnit.SECONDS)
+                } else {
+                    pool.shutdown()
+                    pool.awaitTermination(10, TimeUnit.MINUTES)
                 }
                 val cancelled = !isActive(importId)
                 clearImport(importId)
                 emit("done", total, total, null)
                 val payload = mapOf(
                     "path" to dest.absolutePath,
-                    "copied" to copied[0],
-                    "skipped" to skipped[0],
+                    "copied" to copied.get(),
+                    "skipped" to skipped.get(),
                     "cancelled" to cancelled,
                 )
                 Handler(Looper.getMainLooper()).post { result.success(payload) }
@@ -391,51 +424,80 @@ class MainActivity : FlutterActivity() {
         }.start()
     }
 
-    private fun collect(
-        doc: DocumentFile,
+    /// Reads a SAF tree in one query per folder. DocumentFile's metadata
+    /// accessors each issue a provider query, which made 4,000-file folders
+    /// take minutes even when the bytes copied immediately.
+    private fun queryChildren(
+        treeUri: Uri,
+        parentId: String,
         rel: String,
         out: MutableList<Source>,
         importId: String,
+        jsonOnly: Boolean,
     ) {
         if (!isActive(importId)) return
-        val children = doc.listFiles() ?: return
-        for (child in children) {
-            if (!isActive(importId)) return
-            if (child.isDirectory) {
-                val name = safeDirName(child.name)
-                val childRel = if (rel.isEmpty()) name else "$rel/$name"
-                collect(child, childRel, out, importId)
-                continue
+        val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentId)
+        val cursor = try {
+            contentResolver.query(childrenUri, DOCUMENT_COLUMNS, null, null, null)
+        } catch (_: Exception) {
+            null
+        } ?: return
+        val idCol = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+        if (idCol < 0) {
+            cursor.close()
+            return
+        }
+        val nameCol = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+        val mimeCol = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_MIME_TYPE)
+        val sizeCol = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_SIZE)
+        val modifiedCol = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_LAST_MODIFIED)
+        cursor.use { c ->
+            while (c.moveToNext()) {
+                if (!isActive(importId)) return
+                if (c.isNull(idCol)) continue
+                val docId = c.getString(idCol) ?: continue
+                val raw = if (nameCol >= 0 && !c.isNull(nameCol)) c.getString(nameCol) else null
+                val mime = if (mimeCol >= 0 && !c.isNull(mimeCol)) {
+                    c.getString(mimeCol) ?: ""
+                } else {
+                    ""
+                }
+                if (mime == DocumentsContract.Document.MIME_TYPE_DIR) {
+                    val name = safeDirName(raw)
+                    val childRel = if (rel.isEmpty()) name else "$rel/$name"
+                    queryChildren(treeUri, docId, childRel, out, importId, jsonOnly)
+                    continue
+                }
+                if (raw.isNullOrEmpty()) continue
+                val lower = raw.lowercase()
+                val dot = raw.lastIndexOf('.')
+                val matches = if (jsonOnly) {
+                    lower.endsWith(".json") ||
+                        mime == "application/json" ||
+                        mime.endsWith("+json")
+                } else {
+                    val hasMime = MEDIA_MIMES.any { mime.startsWith(it) }
+                    (dot <= 0 && hasMime) ||
+                        (dot > 0 &&
+                            (lower.substring(dot + 1) in MEDIA_EXTENSIONS || hasMime))
+                }
+                if (!matches) continue
+                val size = if (sizeCol >= 0 && !c.isNull(sizeCol)) c.getLong(sizeCol) else -1L
+                val modified = if (modifiedCol >= 0 && !c.isNull(modifiedCol)) {
+                    c.getLong(modifiedCol)
+                } else {
+                    -1L
+                }
+                out.add(
+                    Source(
+                        uri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId),
+                        relDir = rel,
+                        name = safeName(raw),
+                        size = size,
+                        modified = modified,
+                    ),
+                )
             }
-            val raw = child.name ?: continue
-            val dot = raw.lastIndexOf('.')
-            val type = child.type ?: ""
-            val hasMime = MEDIA_MIMES.any { type.startsWith(it) }
-            if (dot <= 0 && !hasMime) continue
-            if (dot > 0 &&
-                raw.substring(dot + 1).lowercase() !in MEDIA_EXTENSIONS &&
-                !hasMime
-            ) {
-                continue
-            }
-            val size = try {
-                child.length()
-            } catch (_: Exception) {
-                -1L
-            }
-            out.add(
-                Source(
-                    doc = child,
-                    relDir = rel,
-                    name = safeName(raw),
-                    size = size,
-                    modified = try {
-                        child.lastModified()
-                    } catch (_: Exception) {
-                        -1L
-                    },
-                ),
-            )
         }
     }
 
@@ -454,8 +516,13 @@ class MainActivity : FlutterActivity() {
             result.error("already_importing", "Another folder is still importing", null)
             return
         }
-        val tree = DocumentFile.fromTreeUri(this, Uri.parse(uriString))
-        if (tree == null) {
+        val treeUri = Uri.parse(uriString)
+        val rootId = try {
+            DocumentsContract.getTreeDocumentId(treeUri)
+        } catch (_: Exception) {
+            null
+        }
+        if (rootId == null) {
             clearImport(importId)
             result.error("bad_uri", "Could not open that folder", null)
             return
@@ -468,13 +535,13 @@ class MainActivity : FlutterActivity() {
         }
 
         Thread {
-            val copied = intArrayOf(0)
-            val skipped = intArrayOf(0)
-            val buffer = ByteArray(BUFFER_SIZE)
+            val copied = AtomicInteger(0)
+            val skipped = AtomicInteger(0)
+            val used = HashMap<String, MutableSet<String>>()
+            val nameLock = Any()
             try {
                 val sources = mutableListOf<Source>()
-                collectJson(tree, "", sources, importId)
-                val used = HashMap<String, MutableSet<String>>()
+                queryChildren(treeUri, rootId, "", sources, importId, jsonOnly = true)
                 val paths = mutableListOf<String>()
                 for (source in sources) {
                     if (!isActive(importId)) break
@@ -483,14 +550,14 @@ class MainActivity : FlutterActivity() {
                             source,
                             dest,
                             used,
-                            buffer,
+                            nameLock,
                             skipped,
                             copied,
                             overwrite = true,
                         )
                         if (path != null) paths.add(path)
                     } catch (_: Exception) {
-                        skipped[0]++
+                        skipped.incrementAndGet()
                     }
                 }
                 val cancelled = !isActive(importId)
@@ -500,8 +567,8 @@ class MainActivity : FlutterActivity() {
                         mapOf(
                             "path" to dest.absolutePath,
                             "paths" to paths,
-                            "copied" to copied[0],
-                            "skipped" to skipped[0],
+                            "copied" to copied.get(),
+                            "skipped" to skipped.get(),
                             "cancelled" to cancelled,
                         ),
                     )
@@ -515,77 +582,43 @@ class MainActivity : FlutterActivity() {
         }.start()
     }
 
-    private fun collectJson(
-        doc: DocumentFile,
-        rel: String,
-        out: MutableList<Source>,
-        importId: String,
-    ) {
-        if (!isActive(importId)) return
-        for (child in doc.listFiles() ?: return) {
-            if (!isActive(importId)) return
-            if (child.isDirectory) {
-                val name = safeDirName(child.name)
-                val childRel = if (rel.isEmpty()) name else "$rel/$name"
-                collectJson(child, childRel, out, importId)
-                continue
-            }
-            val raw = child.name ?: continue
-            val jsonName = raw.lowercase().endsWith(".json") ||
-                child.type == "application/json" ||
-                (child.type ?: "").endsWith("+json")
-            if (!jsonName) continue
-            val size = try {
-                child.length()
-            } catch (_: Exception) {
-                -1L
-            }
-            out.add(
-                Source(
-                    doc = child,
-                    relDir = rel,
-                    name = safeName(raw),
-                    size = size,
-                    modified = try {
-                        child.lastModified()
-                    } catch (_: Exception) {
-                        -1L
-                    },
-                ),
-            )
-        }
-    }
-
     private fun copyOne(
         source: Source,
         dest: File,
         used: HashMap<String, MutableSet<String>>,
-        buffer: ByteArray,
-        skipped: IntArray,
-        copied: IntArray,
+        nameLock: Any,
+        skipped: AtomicInteger,
+        copied: AtomicInteger,
         overwrite: Boolean = false,
     ): String? {
-        val parent = if (source.relDir.isEmpty()) dest else File(dest, source.relDir)
-        if (!parent.exists() && !parent.mkdirs()) {
-            skipped[0]++
+        // Parent creation and collision-free naming must be atomic: several
+        // worker threads share one destination tree. The stream copy itself is
+        // deliberately outside the lock so SAF reads can overlap.
+        val allocated = synchronized(nameLock) {
+            val parent = if (source.relDir.isEmpty()) dest else File(dest, source.relDir)
+            if (!parent.exists() && !parent.mkdirs()) {
+                null
+            } else {
+                val names = used.getOrPut(parent.path) { HashSet() }
+                var name = source.name
+                var suffix = 1
+                while (!names.add(name)) {
+                    val dot = source.name.lastIndexOf('.')
+                    val base = if (dot > 0) source.name.substring(0, dot) else source.name
+                    val ext = if (dot > 0) source.name.substring(dot) else ""
+                    name = "$base-$suffix$ext"
+                    suffix++
+                }
+                Pair(parent, File(parent, name))
+            }
+        }
+        if (allocated == null) {
+            skipped.incrementAndGet()
             return null
         }
+        val (parent, target) = allocated
+        val name = target.name
 
-        // Sanitizing can make two different names identical. Give each source
-        // a unique name in its destination folder. Lowercasing here would
-        // merge files that differ only by case on case-sensitive storage.
-        val names = used.getOrPut(parent.path) { HashSet() }
-        var name = source.name
-        var suffix = 1
-        while (!names.add(name)) {
-            val dot = source.name.lastIndexOf('.')
-            val base = if (dot > 0) source.name.substring(0, dot) else source.name
-            val ext = if (dot > 0) source.name.substring(dot) else ""
-            name = "$base-$suffix$ext"
-            suffix++
-        }
-
-        val target = File(parent, name)
         // Size alone is not identity: an edited file of the same length must
         // replace the old copy. Unknown source modified times force a copy.
         if (!overwrite &&
@@ -595,39 +628,40 @@ class MainActivity : FlutterActivity() {
             target.length() == source.size &&
             target.lastModified() == source.modified
         ) {
-            skipped[0]++
+            skipped.incrementAndGet()
             return target.absolutePath
         }
 
-        val input = contentResolver.openInputStream(source.doc.uri)
+        val input = contentResolver.openInputStream(source.uri)
         if (input == null) {
-            skipped[0]++
+            skipped.incrementAndGet()
             return null
         }
         // Write to a temporary file so a killed/ interrupted import can never
         // leave a truncated file that looks complete on the next run.
         val part = File(parent, "$name.part")
         try {
-            input.use { sourceStream -> copyStream(sourceStream, part, buffer) }
+            input.use { sourceStream -> copyStream(sourceStream, part) }
         } catch (e: Exception) {
             part.delete()
             throw e
         }
         if (target.exists() && !target.delete()) {
             part.delete()
-            skipped[0]++
+            skipped.incrementAndGet()
             return null
         }
         if (!part.renameTo(target)) {
             part.delete()
-            skipped[0]++
+            skipped.incrementAndGet()
             return null
         }
-        copied[0]++
+        copied.incrementAndGet()
         return target.absolutePath
     }
 
-    private fun copyStream(input: InputStream, target: File, buffer: ByteArray) {
+    private fun copyStream(input: InputStream, target: File) {
+        val buffer = ByteArray(BUFFER_SIZE)
         FileOutputStream(target).use { out ->
             while (true) {
                 val read = input.read(buffer)
