@@ -2,7 +2,7 @@
 
 ## 1.5.1
 
-- Faster Android media imports: batched SAF queries and parallel copies bring a 4,000-file folder from ~3 minutes to ~25 seconds.
+- Faster Android media imports: batched SAF queries and parallel copies makes a 4,000-file folder from ~3 minutes to ~25 seconds.
   
 
 ## 1.5.0
