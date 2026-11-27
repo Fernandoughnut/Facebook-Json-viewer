@@ -9,22 +9,22 @@ A local viewer for Facebook / Messenger JSON exports. Read conversations, search
 
 Available for **Linux** and **Android** (sideloaded APKs).
 
-## Contents
-
-- [Quick start](#quick-start)
-- [Getting your Facebook export](#getting-your-facebook-export)
-- [Features](#features)
-- [Downloads](#downloads)
-- [Build from source](#build-from-source)
-- [Notes and limitations](#notes-and-limitations)
-- [Privacy](#privacy)
-
 ## Quick start
 
 1. Download the Linux bundle or an Android APK from the [latest release](https://github.com/Fernandoughnut/Indexed/releases/latest).
 2. Open one or more `.json` exports with **Open JSON**, or use **Import folder** to load every `.json` file in a folder.
 3. Set **I am** to your name and add your media folder(s) so photos and videos show up inline.
 4. Search, filter, export, or pack a conversation's media.
+
+
+<img width="1276" height="720" alt="1" src="https://github.com/user-attachments/assets/5512e173-9769-4011-8054-020cbedbba61" />
+<img width="1277" height="722" alt="2" src="https://github.com/user-attachments/assets/e16caf78-5bf6-4bb3-8466-7ef862f05153" />
+<img width="1276" height="719" alt="3" src="https://github.com/user-attachments/assets/13788063-476c-45ed-9170-7069de88cbae" />
+<img width="1276" height="719" alt="4" src="https://github.com/user-attachments/assets/da86d982-e31d-4378-8a3f-35dbe528cf05" />
+<img width="1280" height="721" alt="5" src="https://github.com/user-attachments/assets/588e248e-6bcb-411e-996a-89e25e8ad5b3" />
+<img width="1279" height="720" alt="6" src="https://github.com/user-attachments/assets/dd8bf4dd-ce5b-4849-9ab2-e0403078158f" />
+
+
 
 Removing a conversation only hides it locally. Opening its JSON again restores it, and re-picking the same export does not duplicate messages.
 
