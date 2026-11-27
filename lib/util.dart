@@ -256,26 +256,31 @@ Future<String?> pickFolder(Store store, {NavigatorState? navigator}) async {
       '${store.settings.mediaDir}${Platform.pathSeparator}'
       '${AndroidFolderPicker.folderNameFor(uri)}',
     );
+    final existedBefore = dir.existsSync();
     await dir.create(recursive: true);
 
-    // Show progress so a large SAF import does not look frozen.
+    // Show progress so a large SAF import does not look frozen. Keep the route
+    // so the dialog can be removed without popping an unrelated screen.
     final progress = ValueNotifier<Map<String, dynamic>>(
       const <String, dynamic>{},
     );
+    DialogRoute<void>? dialog;
     if (navigator != null && navigator.mounted) {
-      unawaited(
-        showDialog<void>(
-          context: navigator.context,
-          barrierDismissible: false,
-          builder: (_) => _FolderImportDialog(progress: progress),
-        ),
+      dialog = DialogRoute<void>(
+        context: navigator.context,
+        barrierDismissible: false,
+        builder: (_) => _FolderImportDialog(progress: progress),
       );
+      unawaited(navigator.push(dialog));
     }
     store.setStatus('Importing folder… Large folders can take a few minutes.');
-    Future<void> discard() async {
+    Future<void> discardIfNew() async {
+      if (!shouldDiscardImportDir(existedBefore: existedBefore)) return;
       try {
         await dir.delete(recursive: true);
-      } catch (_) {}
+      } catch (e) {
+        store.settings.logError('Could not clean up folder import: $e');
+      }
     }
 
     try {
@@ -286,19 +291,20 @@ Future<String?> pickFolder(Store store, {NavigatorState? navigator}) async {
       );
       final error = result['error'];
       if (error != null) {
-        await discard();
+        await discardIfNew();
+        store.settings.logError('Folder import failed: $error');
         store.setStatus('Could not import that folder: $error');
         return null;
       }
       if (result['cancelled'] == true) {
-        await discard();
+        await discardIfNew();
         store.setStatus('Folder import cancelled.');
         return null;
       }
       final copied = result['copied'] as int? ?? 0;
       final skipped = result['skipped'] as int? ?? 0;
       if (copied == 0 && skipped == 0) {
-        await discard();
+        await discardIfNew();
         store.setStatus('No photos or videos were found in that folder.');
         return null;
       }
@@ -307,8 +313,18 @@ Future<String?> pickFolder(Store store, {NavigatorState? navigator}) async {
         '${skipped > 0 ? ' ($skipped already present or unreadable)' : ''}.',
       );
       return dir.path;
+    } catch (e) {
+      await discardIfNew();
+      store.settings.logError('Folder import failed: $e');
+      store.setStatus('Could not import that folder: $e');
+      return null;
     } finally {
-      if (navigator != null && navigator.mounted) navigator.pop();
+      if (dialog != null &&
+          dialog.isActive &&
+          navigator != null &&
+          navigator.mounted) {
+        navigator.removeRoute(dialog);
+      }
       progress.dispose();
     }
   }
@@ -316,8 +332,10 @@ Future<String?> pickFolder(Store store, {NavigatorState? navigator}) async {
   Uri? uri;
   try {
     uri = await FilePicker.pickDirectory();
-  } catch (_) {
-    uri = null;
+  } catch (e) {
+    store.settings.logError('Folder picker failed: $e');
+    store.setStatus('Could not open the folder picker: $e');
+    return null;
   }
   if (uri != null && uri.scheme == 'file') return uri.toFilePath();
   if (uri != null) {

@@ -6,10 +6,39 @@ import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/services.dart';
 
+/// Routes progress frames to the import that produced them.
+///
+/// Media and JSON imports can overlap, so each import gets its own id and the
+/// channel keeps one handler for the lifetime of the app.
+class ImportProgressRouter {
+  final Map<String, void Function(Map<String, dynamic>)> _listeners =
+      <String, void Function(Map<String, dynamic>)>{};
+
+  int get listenerCount => _listeners.length;
+
+  void register(String id, void Function(Map<String, dynamic>) listener) =>
+      _listeners[id] = listener;
+
+  void unregister(String id) => _listeners.remove(id);
+
+  void dispatch(String method, Object? arguments) {
+    if (method != 'importProgress' || arguments is! Map) return;
+    final id = arguments['importId'] as String?;
+    if (id == null) return;
+    _listeners[id]?.call(Map<String, dynamic>.from(arguments));
+  }
+}
+
+/// Only a failed first import may clean up its new folder. Re-picking the same
+/// tree reuses a hashed folder that may already hold a complete import.
+bool shouldDiscardImportDir({required bool existedBefore}) => !existedBefore;
+
 class AndroidFolderPicker {
   static const MethodChannel _channel = MethodChannel(
     'dev.local.indexed/folder',
   );
+  static final ImportProgressRouter _progress = ImportProgressRouter();
+  static bool _listening = false;
 
   /// Open the folder picker; returns a tree URI or null on cancel/unsupported.
   static Future<String?> pick() async {
@@ -34,6 +63,14 @@ class AndroidFolderPicker {
     void Function(Map<String, dynamic>)? onProgress,
   }) => _copyTree('importJsonFolder', uri, destDir, onProgress: onProgress);
 
+  static void _ensureListener() {
+    if (_listening) return;
+    _listening = true;
+    _channel.setMethodCallHandler(
+      (call) async => _progress.dispatch(call.method, call.arguments),
+    );
+  }
+
   static Future<Map<String, dynamic>> _copyTree(
     String method,
     String uri,
@@ -41,13 +78,8 @@ class AndroidFolderPicker {
     void Function(Map<String, dynamic>)? onProgress,
   }) async {
     final importId = DateTime.now().microsecondsSinceEpoch.toString();
-    _channel.setMethodCallHandler((call) async {
-      if (call.method != 'importProgress') return;
-      final args = call.arguments;
-      if (args is Map && args['importId'] == importId) {
-        onProgress?.call(Map<String, dynamic>.from(args));
-      }
-    });
+    _ensureListener();
+    if (onProgress != null) _progress.register(importId, onProgress);
     try {
       final result = await _channel.invokeMapMethod<String, dynamic>(method, {
         'uri': uri,
@@ -64,7 +96,7 @@ class AndroidFolderPicker {
     } catch (e) {
       return <String, dynamic>{'error': e.toString()};
     } finally {
-      _channel.setMethodCallHandler(null);
+      _progress.unregister(importId);
     }
   }
 
