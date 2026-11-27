@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="linux/runner/resources/app_icon.png" alt="Indexed icon" width="128">
+</p>
+
 # Indexed
 
 [![Flutter checks](https://github.com/Fernandoughnut/Indexed/actions/workflows/flutter.yml/badge.svg)](https://github.com/Fernandoughnut/Indexed/actions/workflows/flutter.yml)
