@@ -4,6 +4,7 @@ import 'dart:async';
 
 import 'package:material_ui/material_ui.dart';
 
+import 'about_screen.dart';
 import 'settings.dart';
 import 'store.dart';
 import 'util.dart';
@@ -868,6 +869,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
 
       // ---------------- about ----------------
+      section(context, 'About', 'version github release source'),
+      ListTile(
+        leading: const Icon(Icons.info_outlined),
+        title: const Text('About Indexed'),
+        subtitle: Text('Version $appVersionLabel'),
+        onTap: () =>
+            Navigator.of(context)
+                .push(MaterialPageRoute(builder: (_) => const AboutScreen())),
+      ),
+
       section(context, 'Files', 'config error log path about'),
       SelectableText(
         'Settings file: ${settings.filePath}',
