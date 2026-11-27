@@ -1,7 +1,5 @@
 // The About page, reachable from Settings.
 
-import 'dart:io';
-
 import 'package:material_ui/material_ui.dart';
 
 import 'util.dart';
@@ -81,9 +79,7 @@ class AboutScreen extends StatelessWidget {
               ),
               const SizedBox(height: 8),
               Text(
-                'PIN protection is a local convenience gate, not encryption. '
-                'Removing a conversation only hides it locally. '
-                'Installed on ${Platform.isAndroid ? 'Android' : 'Linux'}.',
+                '- Polarbreed',
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: cs.onSurfaceVariant,
                 ),
