@@ -12,6 +12,11 @@ void main() {
     expect(appVersionLabel, '1.5.1+5');
   });
 
+  test('About identity and footer keep the requested wording', () {
+    expect(appName, 'Indexed');
+    expect(appFooter, '- Polarbreed');
+  });
+
   test('About links stay on the project repository', () {
     for (final url in [appRepoUrl, appReleasesUrl, appChangelogUrl]) {
       expect(Uri.parse(url).scheme, 'https');

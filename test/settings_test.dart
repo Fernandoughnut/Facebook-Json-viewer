@@ -344,6 +344,62 @@ void main() {
     );
     expect(settings.me, isEmpty);
     expect(settings.readLog(), contains('Could not read state.json'));
+
+    // The first later save must archive the original instead of replacing it.
+    settings.update(() => settings.me = 'Ben');
+    await settings.flush();
+    final bad = dir
+        .listSync()
+        .where((e) => e.path.startsWith('${state.path}.bad-'))
+        .toList();
+    expect(bad, hasLength(1));
+    expect(File(bad.single.path).readAsStringSync(), contains('Ana'));
+    expect(jsonDecode(state.readAsStringSync())['me'], 'Ben');
+  });
+
+  test('a valid-JSON state with a non-object root is preserved', () async {
+    final dir = await Directory.systemTemp.createTemp(
+      'indexed_nonmap_state_test_',
+    );
+    addTearDown(() {
+      if (dir.existsSync()) dir.deleteSync(recursive: true);
+    });
+
+    final state = File('${dir.path}/state.json')..writeAsStringSync('[]');
+    final settings = AppSettings(configDir: dir.path);
+    addTearDown(settings.dispose);
+    await settings.load();
+
+    final bad = dir
+        .listSync()
+        .where((e) => e.path.startsWith('${state.path}.bad-'))
+        .toList();
+    expect(bad, hasLength(1));
+    expect(File(bad.single.path).readAsStringSync(), '[]');
+    expect(settings.readLog(), contains('state.json root is not an object'));
+  });
+
+  test('PIN setter rejects anything but digits', () async {
+    final dir = await Directory.systemTemp.createTemp(
+      'indexed_pin_validation_test_',
+    );
+    addTearDown(() {
+      if (dir.existsSync()) dir.deleteSync(recursive: true);
+    });
+
+    final settings = AppSettings(configDir: dir.path);
+    addTearDown(settings.dispose);
+    await settings.load();
+
+    expect(AppSettings.validPin('123'), isFalse);
+    expect(AppSettings.validPin('12a4'), isFalse);
+    expect(AppSettings.validPin('12 4'), isFalse);
+    expect(AppSettings.validPin('1234'), isTrue);
+    expect(settings.setPin('12a4'), isFalse);
+    expect(settings.lockEnabled, isFalse);
+    expect(settings.lockHash, isEmpty);
+    expect(settings.setPin('1234'), isTrue);
+    expect(settings.pinMatches('1234'), isTrue);
   });
 
   test('a saved state is replaced without a temp leftover', () async {

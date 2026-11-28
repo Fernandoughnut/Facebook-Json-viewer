@@ -5,6 +5,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
 
+import 'package:crypto/crypto.dart';
+
 import 'models.dart';
 
 const senderKeys = [
@@ -29,6 +31,16 @@ const timeKeys = [
   'sentAt',
 ];
 const textKeys = ['content', 'text', 'message', 'body', 'textContent'];
+const mediaKeys = [
+  'photos',
+  'videos',
+  'audio_files',
+  'files',
+  'gifs',
+  'media',
+  'attachments',
+  'images',
+];
 const titleKeys = [
   'title',
   'threadName',
@@ -72,7 +84,6 @@ const replyIdKeys = [
   'quoted_message_id',
   'quotedMessageId',
 ];
-
 dynamic pick(dynamic o, List<String> keys) {
   if (o is! Map) return null;
   for (final k in keys) {
@@ -83,52 +94,106 @@ dynamic pick(dynamic o, List<String> keys) {
 }
 
 /// Repair UTF-8 bytes misread as Latin-1 when it is safe to do so.
+///
+/// Runs are decoded individually so a string can mix real Unicode (an emoji,
+/// for example) with mojibake from CJK, Cyrillic or Greek text.
 String fixEnc(String s) {
   final u = s.codeUnits;
-  var needs = false;
-  for (var i = 0; i < u.length; i++) {
-    final c = u[i];
-    if (c > 255) return s; // already real Unicode (emoji, CJK, ...)
-    // Decode only valid UTF-8 lead+continuation pairs; ordinary Latin-1 stays intact.
-    if ((c == 0xC2 || c == 0xC3 || c == 0xE2 || c == 0xF0) &&
-        i + 1 < u.length &&
-        u[i + 1] >= 0x80 &&
-        u[i + 1] <= 0xBF) {
-      needs = true;
-      break;
+  final out = StringBuffer();
+  var changed = false;
+  var i = 0;
+  while (i < u.length) {
+    final lead = u[i];
+    var length = 0;
+    if (lead >= 0xC2 && lead <= 0xDF) {
+      length = 2;
+    } else if (lead >= 0xE0 && lead <= 0xEF) {
+      length = 3;
+    } else if (lead >= 0xF0 && lead <= 0xF4) {
+      length = 4;
+    }
+    var decoded = '';
+    if (length > 0 && i + length <= u.length) {
+      var valid = true;
+      for (var j = 1; j < length; j++) {
+        final b = u[i + j];
+        if (b < 0x80 || b > 0xBF) {
+          valid = false;
+          break;
+        }
+      }
+      if (valid) {
+        final raw = String.fromCharCodes(u.getRange(i, i + length));
+        try {
+          decoded = utf8.decode(latin1.encode(raw));
+        } catch (_) {
+          decoded = '';
+        }
+        if (decoded == raw) decoded = '';
+      }
+    }
+    if (decoded.isNotEmpty) {
+      out.write(decoded);
+      changed = true;
+      i += length;
+    } else {
+      out.writeCharCode(lead);
+      i++;
     }
   }
-  if (!needs) return s;
-  try {
-    return utf8.decode(latin1.encode(s));
-  } catch (_) {
-    return s;
-  }
+  return changed ? out.toString() : s;
 }
 
-int? toMs(dynamic v) {
-  if (v is num) {
-    final n = v.toDouble();
-    return (n < 1e11 ? n * 1000 : n).round();
-  }
+int? toMs(dynamic v) => toMsWithHint(v, null);
+
+/// [key] lets explicit *_ms fields keep their units; only ambiguous numeric
+/// fields large enough to be microseconds are divided by 1000.
+int? toMsWithHint(dynamic v, String? key) {
+  if (v is num) return _numToMs(v.toDouble(), key);
   if (v is String) {
     final s = v.trim();
     final n = num.tryParse(s);
-    if (n != null) {
-      final d = n.toDouble();
-      return (d < 1e11 ? d * 1000 : d).round();
-    }
+    if (n != null) return _numToMs(n.toDouble(), key);
     return DateTime.tryParse(s)?.millisecondsSinceEpoch;
   }
   return null;
 }
 
+int? _numToMs(double d, String? key) {
+  final explicitlyMs =
+      key != null &&
+      (key.endsWith('_ms') || key.endsWith('Ms') || key.endsWith('MS'));
+  if (explicitlyMs) return d.round();
+  if (d >= 1e14) return (d / 1000).round();
+  if (d < 1e11) return (d * 1000).round();
+  return d.round();
+}
+
+({String key, dynamic value})? pickWithKey(dynamic o, List<String> keys) {
+  if (o is! Map) return null;
+  for (final k in keys) {
+    final v = o[k];
+    if (v != null && v != '') return (key: k, value: v);
+  }
+  return null;
+}
+
+int? timeOf(Map m) {
+  final e = pickWithKey(m, timeKeys);
+  return e == null ? null : toMsWithHint(e.value, e.key);
+}
+
 bool isMsgLike(dynamic o) {
   if (o is! Map) return false;
-  final hasTime = toMs(pick(o, timeKeys)) != null;
+  final hasTime = timeOf(o) != null;
   final hasSender = pick(o, senderKeys) != null;
   final hasText = pick(o, textKeys) != null;
-  return hasTime && (hasSender || hasText);
+  final hasMedia =
+      mediaKeys.any((k) => (o[k] as List?)?.isNotEmpty ?? false) ||
+      o['sticker'] != null ||
+      o['share'] != null ||
+      o['reactions'] is List;
+  return hasTime && (hasSender || hasText || hasMedia);
 }
 
 bool looksMsgArray(dynamic a) {
@@ -184,10 +249,19 @@ String nameOf(dynamic x) {
   return fixEnc('$x');
 }
 
+/// IDs are hex-ish or contain digits; "ok", "yes" and emoji are quoted text.
+bool _looksLikeReplyId(String s) {
+  if (s.length < 8 || s.length > 80) return false;
+  if (RegExp(r'^[0-9a-fA-F-]{8,}$').hasMatch(s)) return true;
+  return s.contains(RegExp(r'\d')) && RegExp(r'^[A-Za-z0-9_.:-]+$').hasMatch(s);
+}
+
 /// Resolve a reply from a nested object or a bare original message ID.
 Reply? parseReply(Map m) {
-  final rid = pick(m, replyIdKeys);
-  final rv = pick(m, replyKeys);
+  final ridEntry = pickWithKey(m, replyIdKeys);
+  final rvEntry = pickWithKey(m, replyKeys);
+  final rid = ridEntry?.value;
+  final rv = rvEntry?.value;
   if (rv == null && rid == null) return null;
   if (rv is bool || rv is List) {
     // Some exports mark the reply with a flag/list but keep the ID elsewhere.
@@ -198,35 +272,29 @@ Reply? parseReply(Map m) {
     final tv = pick(rv, textKeys);
     return Reply(
       id: '${pick(rv, msgIdKeys) ?? rid ?? ''}',
-      sender: nameOf(pick(rv, senderKeys)),
+      sender: nameOf(pick(rv, ['senderOriginal', ...senderKeys])),
       text: tv == null ? '' : fixEnc(tv is String ? tv : jsonEncode(tv)),
-      t: toMs(pick(rv, timeKeys)),
+      t: timeOf(rv),
     );
   }
   if (rid != null) return Reply(id: '$rid');
   final s = '$rv';
-  // a bare string: an ID if it looks like one, otherwise the quoted text itself
-  if (!s.contains(' ') && s.length < 80) return Reply(id: s);
+  // Only *_id fields are certainly IDs. A bare `reply` value may be quoted
+  // text such as "ok" or an emoji, so use the shape of the value instead.
+  if (ridEntry != null || _looksLikeReplyId(s)) return Reply(id: s);
   return Reply(text: fixEnc(s));
 }
 
 Msg normMsg(Map m, {bool keepRaw = true}) {
-  final sender = nameOf(pick(m, senderKeys));
-  final t = toMs(pick(m, timeKeys));
+  // Export-time aliases are written alongside the original identity; prefer
+  // the original so re-importing our own export cannot rename people.
+  final sender = nameOf(pick(m, ['senderOriginal', ...senderKeys]));
+  final t = timeOf(m);
   final tv = pick(m, textKeys);
   final text = tv == null ? '' : fixEnc(tv is String ? tv : jsonEncode(tv));
 
   final media = <Media>[];
-  for (final k in [
-    'photos',
-    'videos',
-    'audio_files',
-    'files',
-    'gifs',
-    'media',
-    'attachments',
-    'images',
-  ]) {
+  for (final k in mediaKeys) {
     final v = m[k];
     if (v is List) {
       for (final x in v) {
@@ -238,7 +306,11 @@ Msg normMsg(Map m, {bool keepRaw = true}) {
     }
   }
   final st = m['sticker'];
-  if (st is Map) media.add(Media('sticker', '${st['uri'] ?? ''}'));
+  if (st is Map) {
+    media.add(Media('sticker', '${st['uri'] ?? ''}'));
+  } else if (st is String && st.isNotEmpty) {
+    media.add(Media('sticker', st));
+  }
 
   final reactions = <Reaction>[];
   final rx = m['reactions'];
@@ -250,7 +322,7 @@ Msg normMsg(Map m, {bool keepRaw = true}) {
         reactions.add(
           Reaction(
             fixEnc('${pick(r, ['reaction', 'emoji', 'type']) ?? ''}'),
-            nameOf(pick(r, ['actor', 'user', 'name'])),
+            nameOf(pick(r, ['actorOriginal', 'actor', 'user', 'name'])),
           ),
         );
       }
@@ -258,7 +330,11 @@ Msg normMsg(Map m, {bool keepRaw = true}) {
   }
 
   final sv = m['share'];
-  final share = sv is Map ? '${sv['link'] ?? sv['url'] ?? ''}' : '';
+  final share = sv is Map
+      ? '${sv['link'] ?? sv['url'] ?? ''}'
+      : sv == null
+      ? ''
+      : fixEnc('$sv');
 
   return Msg(
     id: '${pick(m, msgIdKeys) ?? ''}',
@@ -286,7 +362,7 @@ List<ParsedThread> parseExport(
   for (final f in findThreads(json)) {
     final meta = f.meta;
     final parts = <String>[];
-    final pv = meta['participants'];
+    final pv = meta['participantsOriginal'] ?? meta['participants'];
     if (pv is List) {
       for (final p in pv) {
         final n = nameOf(p);
@@ -509,6 +585,11 @@ void pruneParseCache(String cacheDir) {
   }
 }
 
+/// Content fingerprint for caches. Size and mtime alone miss same-length edits
+/// made by a re-export, and a head/tail sample misses edits in the middle.
+String quickFileFingerprint(String path) =>
+    sha256.convert(File(path).readAsBytesSync()).toString();
+
 List<ParsedThread> parseFileCached(
   String path, {
   String? cacheDir,
@@ -517,9 +598,8 @@ List<ParsedThread> parseFileCached(
 }) {
   if (!useCache || cacheDir == null) return parseFile(path, keepRaw: keepRaw);
 
-  final stat = File(path).statSync();
   final sig =
-      '$cacheFormatVersion|$parserVersion|$path|${stat.size}|${stat.modified.microsecondsSinceEpoch}|${keepRaw ? 1 : 0}';
+      '$cacheFormatVersion|$parserVersion|$path|${quickFileFingerprint(path)}|${keepRaw ? 1 : 0}';
   final file = File('$cacheDir/${_cacheHash(sig)}.json');
   try {
     if (file.existsSync()) {

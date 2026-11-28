@@ -248,6 +248,67 @@ void main() {
       );
     },
   );
+
+  test('plans default to re-importable original names', () {
+    final plan = planMediaPack(
+      [
+        _msg(0, 'A', 'D1', [Media('photos', 'pics/a.jpg')]),
+      ],
+      findMedia: (_) => '/fake/a.jpg',
+      dateLabel: (_) => 'D1',
+    );
+    expect(plan.naming, MediaNamingMode.originalSorted);
+    expect(plan.files.single.name, 'media/pics/a.jpg');
+  });
+
+  test(
+    'pruning a file removes its manifest references and recounts them',
+    () async {
+      final dir = await Directory.systemTemp.createTemp('indexed_prune_test_');
+      addTearDown(() {
+        if (dir.existsSync()) dir.deleteSync(recursive: true);
+      });
+      final kept = File('${dir.path}/a.jpg')..writeAsStringSync('kept');
+      final gone = File('${dir.path}/gone.jpg')..writeAsStringSync('gone');
+      MediaPackReference ref(String packed, {String uri = 'pics/a.jpg'}) =>
+          MediaPackReference(
+            messageIndex: 0,
+            sender: 'Ana',
+            timestamp: 1000,
+            kind: 'photos',
+            uri: uri,
+            originalName: uri,
+            packedAs: packed,
+          );
+      final plan = MediaPackPlan(
+        files: [
+          MediaPackFile(kept.path, 'media/a.jpg'),
+          MediaPackFile(gone.path, 'media/gone.jpg', order: 1),
+        ],
+        references: [
+          ref('media/a.jpg'),
+          ref('media/gone.jpg', uri: 'pics/gone.jpg'),
+          ref('media/a.jpg'),
+          ref('media/a.jpg', uri: ''),
+        ],
+        missing: const <String>[],
+      );
+
+      gone.deleteSync();
+      final pruned = pruneUnreadableMediaPack(plan);
+
+      expect(pruned.files.map((f) => f.name), ['media/a.jpg']);
+      expect(pruned.references.map((r) => r.packedAs), [
+        'media/a.jpg',
+        'media/a.jpg',
+        'media/a.jpg',
+      ]);
+      expect(pruned.missing, contains('pics/gone.jpg'));
+      expect(pruned.duplicateReferences, 2);
+      expect(pruned.emptyReferences, 1);
+      expect(pruned.naming, MediaNamingMode.originalSorted);
+    },
+  );
 }
 
 Msg _msg(int t, String sender, String date, List<Media> media) => Msg(

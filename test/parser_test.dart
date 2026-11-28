@@ -1,5 +1,6 @@
 // Parser regression tests, using a real modern Messenger export as the fixture.
 
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -61,9 +62,9 @@ void main() {
   });
 
   test('reply variants are recognised', () {
-    expect(parseReply({'reply_to': 'abc'})!.id, 'abc');
+    expect(parseReply({'reply_to_id': 'abc'})!.id, 'abc');
     expect(parseReply({'replyToMessageId': 'xyz'})!.id, 'xyz');
-    expect(parseReply({'reply': true, 'reply_to': 'abc'})!.id, 'abc');
+    expect(parseReply({'reply': true, 'reply_to_id': 'abc'})!.id, 'abc');
     final nested = parseReply({
       'quoted_message': {
         'message_id': 'q1',
@@ -127,4 +128,88 @@ void main() {
       expect(index.paths['photos/a.jpg'], isNot(index.paths['videos/a.jpg']));
     },
   );
+
+  test(
+    'encoding repair handles non-Latin mojibake mixed with real Unicode',
+    () {
+      String mojibake(String s) => String.fromCharCodes(utf8.encode(s));
+      expect(fixEnc(mojibake('你好 😆')), '你好 😆');
+      expect(fixEnc(mojibake('Привет')), 'Привет');
+      expect(fixEnc(mojibake('Ελληνικά')), 'Ελληνικά');
+      expect(fixEnc('你好 😆'), '你好 😆');
+      expect(fixEnc('café'), 'café');
+    },
+  );
+
+  test('timestamp hints keep explicit milliseconds but fix microseconds', () {
+    expect(toMs(1700000000000000), 1700000000000);
+    expect(toMsWithHint(1700000000000000, 'timestamp_ms'), 1700000000000000);
+    expect(timeOf({'timestampMs': 1700000000000000}), 1700000000000000);
+  });
+
+  test('bare replies distinguish short text from real IDs', () {
+    expect(parseReply({'reply_to': 'ok'})!.text, 'ok');
+    expect(parseReply({'reply_to': 'ok'})!.id, isEmpty);
+    expect(parseReply({'reply': 'ok'})!.text, 'ok');
+    expect(parseReply({'reply': 'abc123def456'})!.id, 'abc123def456');
+    expect(parseReply({'reply': '👍'})!.text, '👍');
+    expect(parseReply({'reply': '👍'})!.id, isEmpty);
+  });
+
+  test('timestamped media-only and sticker-only messages survive parsing', () {
+    final exported = <String, dynamic>{
+      'threadId': 'media-only',
+      'threadName': 'Media',
+      'participants': [
+        <String, dynamic>{'name': 'Ana'},
+      ],
+      'messages': [
+        <String, dynamic>{
+          'timestamp_ms': 1000,
+          'photos': [
+            <String, dynamic>{'uri': 'photos/a.jpg'},
+          ],
+        },
+        <String, dynamic>{'timestamp_ms': 2000, 'sticker': 'stickers/s.png'},
+      ],
+    };
+    final thread = parseExport(exported, 'media-only.json').single;
+    expect(thread.messages, hasLength(2));
+    expect(thread.messages[0].media.single.uri, 'photos/a.jpg');
+    expect(thread.messages[1].media.single.kind, 'sticker');
+    expect(thread.messages[1].media.single.uri, 'stickers/s.png');
+  });
+
+  test('export aliases never overwrite original identities on re-import', () {
+    final raw = <String, dynamic>{
+      'sender': 'A',
+      'senderOriginal': 'Ana',
+      'timestamp_ms': 1000,
+      'content': 'hello',
+      'share': 'https://example.invalid/a',
+      'reactions': [
+        <String, dynamic>{'emoji': '👍', 'actor': 'B', 'actorOriginal': 'Ben'},
+      ],
+      'reply': <String, dynamic>{
+        'id': 'm0',
+        'sender': 'B',
+        'senderOriginal': 'Ben',
+        'text': 'earlier',
+      },
+    };
+    final msg = normMsg(raw);
+    expect(msg.sender, 'Ana');
+    expect(msg.share, 'https://example.invalid/a');
+    expect(msg.reactions.single.actor, 'Ben');
+    expect(msg.reply!.sender, 'Ben');
+
+    final thread = parseExport(<String, dynamic>{
+      'threadId': 'aliases',
+      'threadName': 'Aliases',
+      'participants': ['A', 'B'],
+      'participantsOriginal': ['Ana', 'Ben'],
+      'messages': [raw],
+    }, 'aliases.json').single;
+    expect(thread.participants, ['Ana', 'Ben']);
+  });
 }

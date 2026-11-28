@@ -17,7 +17,9 @@ rm -f "$ARCHIVE" "$ARCHIVE.sha256"
 # The trailing '.' is essential: the archive must contain the bundle's contents,
 # not a top-level 'bundle' directory.
 tar -czf "$ARCHIVE" -C build/linux/x64/release/bundle .
-sha256sum "$ARCHIVE" > "$ARCHIVE.sha256"
+# Keep a bare name in the checksum so `sha256sum -c` works after download.
+BASE="$(basename "$ARCHIVE")"
+(cd "$(dirname "$ARCHIVE")" && sha256sum "$BASE" > "$BASE.sha256")
 
 echo "$ARCHIVE"
 echo "$ARCHIVE.sha256"

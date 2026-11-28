@@ -244,6 +244,7 @@ class _HomeScreenState extends State<HomeScreen> {
   final filterController = TextEditingController();
   bool _wide = false;
   Msg? _jumpTarget;
+  int _jumpSeq = 0;
   bool unlocked = false;
   bool _largeFileWarningShown = false;
   final ScrollController _chatListController = ScrollController();
@@ -272,7 +273,7 @@ class _HomeScreenState extends State<HomeScreen> {
     await _offerLighterMemoryForLargeFiles(widget.settings.jsonPaths);
     await store.restoreSession();
     final last = widget.settings.lastChat;
-    if (mounted && last.isNotEmpty && store.chats.containsKey(last)) {
+    if (mounted && _wide && last.isNotEmpty && store.chats.containsKey(last)) {
       setState(() => selected = store.chats[last]);
     }
   }
@@ -294,7 +295,10 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void clearSession() {
-    setState(() => selected = null);
+    setState(() {
+      selected = null;
+      _jumpTarget = null;
+    });
     store.clear();
   }
 
@@ -543,6 +547,13 @@ class _HomeScreenState extends State<HomeScreen> {
     showDialog<void>(context: context, builder: (_) => const ShortcutSheet());
   }
 
+  void showShortcutSheetIfNotTyping() {
+    // "?" is printable: it must not steal keystrokes from search fields.
+    final focus = FocusManager.instance.primaryFocus;
+    if (focus?.context?.widget is EditableText) return;
+    showShortcutSheet();
+  }
+
   List<CommandAction> commandActions() => [
     CommandAction(
       label: 'Open JSON files',
@@ -638,21 +649,22 @@ class _HomeScreenState extends State<HomeScreen> {
     );
     await _offerLighterMemoryForLargeFiles(paths);
     await store.addJsonFiles(paths, reviveRemoved: true);
-    if (mounted && selected == null && store.chats.length == 1) {
+    if (mounted && _wide && selected == null && store.chats.length == 1) {
       setState(() => selected = store.chats.values.first);
     }
   }
 
   Future<void> importJsonFolder() async {
     List<String> files;
+    String? safDest;
     if (Platform.isAndroid) {
       // SAF tree URIs cannot be opened with dart:io. The native bridge copies
       // the JSON files into app-private storage, then Dart imports those paths.
       final uri = await AndroidFolderPicker.pick();
       if (uri == null) return;
-      final dest =
+      safDest =
           '${widget.settings.importDir}/json/${AndroidFolderPicker.folderNameFor(uri)}';
-      final result = await AndroidFolderPicker.importJson(uri, dest);
+      final result = await AndroidFolderPicker.importJson(uri, safDest);
       final error = result['error'] as String?;
       if (error != null || !mounted) {
         if (mounted) {
@@ -693,6 +705,16 @@ class _HomeScreenState extends State<HomeScreen> {
       }
       return;
     }
+    if (Platform.isAndroid && safDest != null) {
+      // A re-picked SAF tree replaces that folder's snapshot. Drop remembered
+      // paths to copies the native bridge just pruned, or restore would load
+      // deleted chats from those stale files.
+      final prefix = '$safDest${Platform.pathSeparator}';
+      final fresh = files.toSet();
+      widget.settings.jsonPaths.removeWhere(
+        (p) => p.startsWith(prefix) && !fresh.contains(p),
+      );
+    }
     widget.settings.logBreadcrumb(
       'Import folder: ${files.length} file(s), keepRaw=${widget.settings.keepRaw}',
     );
@@ -703,7 +725,7 @@ class _HomeScreenState extends State<HomeScreen> {
       // The SAF bridge already copied these into durable app-private storage.
       persist: !Platform.isAndroid,
     );
-    if (mounted && selected == null && store.chats.length == 1) {
+    if (mounted && _wide && selected == null && store.chats.length == 1) {
       setState(() => selected = store.chats.values.first);
     }
   }
@@ -722,6 +744,9 @@ class _HomeScreenState extends State<HomeScreen> {
     );
     widget.settings.lastChat = c.key;
     widget.settings.save();
+    // Re-tapping the open chat without a target must not dispose its view.
+    if (wide && selected?.key == c.key && target == null) return;
+    final jumpNonce = target == null ? 0 : ++_jumpSeq;
     if (wide) {
       setState(() {
         selected = c;
@@ -735,8 +760,12 @@ class _HomeScreenState extends State<HomeScreen> {
             // this route sits outside the home screen, so it listens for changes itself
             body: ListenableBuilder(
               listenable: Listenable.merge([store, widget.settings]),
-              builder: (context, _) =>
-                  ChatView(store: store, chat: c, initialTarget: target),
+              builder: (context, _) => ChatView(
+                store: store,
+                chat: c,
+                initialTarget: target,
+                jumpNonce: jumpNonce,
+              ),
             ),
           ),
         ),
@@ -1133,7 +1162,7 @@ class _HomeScreenState extends State<HomeScreen> {
         const SingleActivator(LogicalKeyboardKey.keyK, meta: true):
             openCommandPalette,
         const SingleActivator(LogicalKeyboardKey.slash, shift: true):
-            showShortcutSheet,
+            showShortcutSheetIfNotTyping,
       },
       child: Focus(
         autofocus: true,
@@ -1141,7 +1170,18 @@ class _HomeScreenState extends State<HomeScreen> {
           listenable: _changes,
           builder: (context, _) => LayoutBuilder(
             builder: (context, box) {
-              final wide = box.maxWidth >= 800;
+              final wide = box.maxWidth >= kWideLayoutBreakpoint;
+              if (_wide && !wide && selected != null) {
+                // A narrow layout has no visible chat to go Back from.
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (mounted) {
+                    setState(() {
+                      selected = null;
+                      _jumpTarget = null;
+                    });
+                  }
+                });
+              }
               _wide = wide;
               // Let the navigator handle Back whenever we are at the chat
               // list (including dialogs above it). Only intercept Back while
@@ -1235,14 +1275,11 @@ class _HomeScreenState extends State<HomeScreen> {
                                 child: selected == null
                                     ? _chatPlaceholder()
                                     : ChatView(
-                                        key: ValueKey(
-                                          _jumpTarget == null
-                                              ? selected!.key
-                                              : '${selected!.key}|${Store.messageKey(_jumpTarget!)}',
-                                        ),
+                                        key: ValueKey(selected!.key),
                                         store: store,
                                         chat: selected!,
                                         initialTarget: _jumpTarget,
+                                        jumpNonce: _jumpSeq,
                                       ),
                               ),
                             ],

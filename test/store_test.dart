@@ -422,7 +422,125 @@ void main() {
 
     expect(store.findMedia('photos/a.jpg', chat), file.path);
   });
+
+  test(
+    'exact dedupe keys keep messages whose compact hashes collide',
+    () async {
+      final dir = await Directory.systemTemp.createTemp('indexed_hash_test_');
+      addTearDown(() {
+        if (dir.existsSync()) dir.deleteSync(recursive: true);
+      });
+      final settings = AppSettings(configDir: dir.path);
+      addTearDown(settings.dispose);
+      await settings.load();
+      final store = Store(settings);
+      addTearDown(store.dispose);
+
+      // Object.hash('c', 'id:collision-*') collides for these two IDs.
+      final json = File('${dir.path}/collide.json')
+        ..writeAsStringSync(
+          jsonEncode([
+            <String, dynamic>{
+              'threadId': 'c',
+              'threadName': 'C',
+              'messages': [
+                <String, dynamic>{
+                  'message_id': 'collision-2055',
+                  'sender_name': 'Ana',
+                  'timestamp_ms': 1000,
+                  'content': 'first',
+                },
+                <String, dynamic>{
+                  'message_id': 'collision-76768',
+                  'sender_name': 'Ben',
+                  'timestamp_ms': 2000,
+                  'content': 'second',
+                },
+              ],
+            },
+          ]),
+        );
+      await store.addJsonFiles([json.path]);
+
+      expect(
+        store.chats['c']!.messages.map((m) => m.id),
+        unorderedEquals(['collision-2055', 'collision-76768']),
+      );
+    },
+  );
+
+  test(
+    'explicit re-add replaces only that file\'s overlapping copies',
+    () async {
+      final dir = await Directory.systemTemp.createTemp('indexed_readd_test_');
+      addTearDown(() {
+        if (dir.existsSync()) dir.deleteSync(recursive: true);
+      });
+      final settings = AppSettings(configDir: dir.path)..dedupeImports = false;
+      addTearDown(settings.dispose);
+      await settings.load();
+      settings.dedupeImports = false;
+      final store = Store(settings);
+      addTearDown(store.dispose);
+
+      final a = File('${dir.path}/a.json')
+        ..writeAsStringSync(_oneMessageJson('from A'));
+      final b = File('${dir.path}/b.json')
+        ..writeAsStringSync(_oneMessageJson('from B'));
+      await store.addJsonFiles([a.path, b.path]);
+      final chat = store.chats['shared']!;
+      expect(
+        chat.messages.map((m) => m.text),
+        unorderedEquals(['from A', 'from B']),
+      );
+
+      a.writeAsStringSync(_oneMessageJson('from A v2'));
+      await store.addJsonFiles([a.path], reviveRemoved: true);
+      expect(
+        chat.messages.map((m) => m.text),
+        unorderedEquals(['from A v2', 'from B']),
+      );
+    },
+  );
+
+  test('resolveReplies is idempotent', () async {
+    final dir = await Directory.systemTemp.createTemp('indexed_replies_test_');
+    addTearDown(() {
+      if (dir.existsSync()) dir.deleteSync(recursive: true);
+    });
+    final settings = AppSettings(configDir: dir.path);
+    addTearDown(settings.dispose);
+    await settings.load();
+    final store = Store(settings);
+    addTearDown(store.dispose);
+
+    final chat = Chat('replies', 'Replies');
+    final target = _msg('m1', 'Ana', 1000);
+    final reply = _msg('m2', 'Ben', 2000, reply: const Reply(id: 'm1'));
+    chat.messages.addAll([target, reply]);
+    store.chats[chat.key] = chat;
+
+    expect(store.resolveReplies(chat), 1);
+    expect(store.replyCount(target), 1);
+    expect(store.resolveReplies(chat), 1);
+    expect(store.replyCount(target), 1);
+  });
 }
+
+String _oneMessageJson(String text) => jsonEncode([
+  <String, dynamic>{
+    'threadId': 'shared',
+    'threadName': 'Shared',
+    'messages': [
+      <String, dynamic>{
+        'message_id': 'm1',
+        'sender_name': 'Ana',
+        'timestamp_ms': 1000,
+        'content': text,
+      },
+    ],
+  },
+]);
 
 String _twoThreadJson() => jsonEncode([
   <String, dynamic>{

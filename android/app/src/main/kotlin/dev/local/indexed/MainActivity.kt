@@ -14,6 +14,8 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.InputStream
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -53,23 +55,18 @@ class MainActivity : FlutterActivity() {
     private var exportChannel: MethodChannel? = null
     private var pendingFolderResult: MethodChannel.Result? = null
     private var pendingExportFolderResult: MethodChannel.Result? = null
-    private var activeImportId: String? = null
+    private val activeImports = HashSet<String>()
 
-    private fun isActive(id: String) = synchronized(this) { activeImportId == id }
+    private fun isActive(id: String) = synchronized(this) { activeImports.contains(id) }
 
-    private fun clearImport(id: String) = synchronized(this) {
-        if (activeImportId == id) activeImportId = null
+    private fun clearImport(id: String) = synchronized(this) { activeImports.remove(id) }
+
+    private fun cancelImport(id: String?) = synchronized(this) {
+        if (id == null) activeImports.clear() else activeImports.remove(id)
     }
 
-    private fun cancelImport() = synchronized(this) { activeImportId = null }
-
     private fun beginImport(id: String): Boolean = synchronized(this) {
-        if (activeImportId != null) {
-            false
-        } else {
-            activeImportId = id
-            true
-        }
+        activeImports.add(id)
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -82,7 +79,7 @@ class MainActivity : FlutterActivity() {
                 "importFolder" -> importFolder(call, result)
                 "importJsonFolder" -> importJsonFolder(call, result)
                 "cancelImport" -> {
-                    cancelImport()
+                    cancelImport(call.argument<String>("importId"))
                     result.success(null)
                 }
                 "openLink" -> openLink(call, result)
@@ -96,6 +93,7 @@ class MainActivity : FlutterActivity() {
             when (call.method) {
                 "pickExportFolder" -> pickExportFolder(result)
                 "writeFileToFolder" -> writeFileToFolder(call, result)
+                "copyFilesToFolder" -> copyFilesToFolder(call, result)
                 else -> result.notImplemented()
             }
         }
@@ -114,7 +112,7 @@ class MainActivity : FlutterActivity() {
         )
         pendingFolderResult = null
         pendingExportFolderResult = null
-        cancelImport()
+        cancelImport(null)
         super.onDestroy()
     }
 
@@ -138,6 +136,7 @@ class MainActivity : FlutterActivity() {
     private fun pickFolder(result: MethodChannel.Result) {
         val previous = pendingFolderResult
         if (previous != null) {
+            pendingFolderResult = null
             previous.error("in_progress", "A folder pick is already open", null)
             result.error("in_progress", "A folder pick is already open", null)
             return
@@ -160,6 +159,7 @@ class MainActivity : FlutterActivity() {
     private fun pickExportFolder(result: MethodChannel.Result) {
         val previous = pendingExportFolderResult
         if (previous != null) {
+            pendingExportFolderResult = null
             previous.error("in_progress", "A folder pick is already open", null)
             result.error("in_progress", "A folder pick is already open", null)
             return
@@ -244,17 +244,16 @@ class MainActivity : FlutterActivity() {
         }
 
         Thread {
+            var staged: DocumentFile? = null
             try {
                 val name = safeName(fileName)
-                val existing = tree.findFile(name)
-                if (existing != null && !existing.delete()) {
-                    throw IllegalStateException("Could not replace $name")
-                }
-                val target = tree.createFile("application/zip", name)
-                    ?: throw IllegalStateException("Could not create $name")
-                if (target.name != name) {
-                    throw IllegalStateException("Provider renamed $name to ${target.name}")
-                }
+                // Stage the replacement first: the previous archive stays intact
+                // until the new one has been written and verified.
+                val tempName = "$name.part-$exportId"
+                tree.findFile(tempName)?.delete()
+                staged = tree.createFile("application/octet-stream", tempName)
+                    ?: throw IllegalStateException("Could not create $tempName")
+                val target = staged!!
                 val total = source.length()
                 val out = contentResolver.openOutputStream(target.uri, "rwt")
                     ?: throw IllegalStateException("Could not open $name for writing")
@@ -292,21 +291,92 @@ class MainActivity : FlutterActivity() {
                         output.flush()
                     }
                 }
+                if (target.length() != total) {
+                    throw IllegalStateException("The staged archive is incomplete")
+                }
+                val existing = tree.findFile(name)
+                if (existing != null && !existing.delete()) {
+                    throw IllegalStateException("Could not replace $name")
+                }
+                if (!target.renameTo(name)) {
+                    throw IllegalStateException("Could not name the new archive $name")
+                }
                 emit(final = true)
+                val finalDoc = tree.findFile(name) ?: target
                 Handler(Looper.getMainLooper()).post {
                     result.success(
                         mapOf(
-                            "uri" to target.uri.toString(),
-                            "name" to (target.name ?: name),
+                            "uri" to finalDoc.uri.toString(),
+                            "name" to (finalDoc.name ?: name),
                         ),
                     )
                 }
             } catch (e: Exception) {
+                staged?.delete()
                 Handler(Looper.getMainLooper()).post {
                     result.error("export_failed", e.toString(), null)
                 }
             }
         }.start()
+    }
+
+    /// Copy already-chosen files into a writable SAF tree under new names.
+    /// Used by "Copy media with readable names", where dart:io cannot see the
+    /// destination chosen through the system folder picker.
+    private fun copyFilesToFolder(call: MethodCall, result: MethodChannel.Result) {
+        val uriString = call.argument<String>("uri")
+        val rawJobs = call.argument<List<*>>("jobs")
+        if (uriString == null || rawJobs == null) {
+            result.error("invalid_args", "uri and jobs are required", null)
+            return
+        }
+        val tree = DocumentFile.fromTreeUri(this, Uri.parse(uriString))
+        if (tree == null || !tree.canWrite()) {
+            result.error("bad_folder", "That folder is not writable", null)
+            return
+        }
+        val jobs = rawJobs.mapNotNull { raw ->
+            val job = raw as? List<*> ?: return@mapNotNull null
+            val source = job.getOrNull(0) as? String ?: return@mapNotNull null
+            val name = job.getOrNull(1) as? String ?: return@mapNotNull null
+            Pair(source, name)
+        }
+        Thread {
+            var copied = 0
+            for ((sourcePath, name) in jobs) {
+                try {
+                    val source = File(sourcePath)
+                    if (!source.exists()) continue
+                    val target = tree.createFile(mimeForName(name), safeName(name))
+                        ?: continue
+                    contentResolver.openOutputStream(target.uri, "rwt")?.use { out ->
+                        FileInputStream(source).use { input ->
+                            input.copyTo(out, BUFFER_SIZE)
+                        }
+                    } ?: continue
+                    copied++
+                } catch (_: Exception) {
+                    // One unreadable source must not abort the whole copy.
+                }
+            }
+            Handler(Looper.getMainLooper()).post {
+                result.success(mapOf("copied" to copied))
+            }
+        }.start()
+    }
+
+    private fun mimeForName(name: String): String = when (
+        name.substringAfterLast('.', "").lowercase()
+    ) {
+        "jpg", "jpeg" -> "image/jpeg"
+        "png" -> "image/png"
+        "gif" -> "image/gif"
+        "webp" -> "image/webp"
+        "heic", "heif" -> "image/heic"
+        "mp4", "m4v" -> "video/mp4"
+        "mov" -> "video/quicktime"
+        "webm" -> "video/webm"
+        else -> "application/octet-stream"
     }
 
     private fun importFolder(call: MethodCall, result: MethodChannel.Result) {
@@ -555,6 +625,18 @@ class MainActivity : FlutterActivity() {
                         skipped.incrementAndGet()
                     }
                 }
+                if (isActive(importId)) {
+                    // A re-picked tree replaces the imported snapshot. Stale JSON
+                    // copies would otherwise resurrect chats the user removed.
+                    val keep = paths.map { File(it).absolutePath }.toSet()
+                    dest.walkTopDown()
+                        .filter {
+                            it.isFile &&
+                                it.extension.equals("json", ignoreCase = true) &&
+                                it.absolutePath !in keep
+                        }
+                        .forEach { it.delete() }
+                }
                 val cancelled = !isActive(importId)
                 clearImport(importId)
                 Handler(Looper.getMainLooper()).post {
@@ -637,15 +719,27 @@ class MainActivity : FlutterActivity() {
             part.delete()
             throw e
         }
-        if (target.exists() && !target.delete()) {
-            part.delete()
-            skipped.incrementAndGet()
-            return null
-        }
-        if (!part.renameTo(target)) {
-            part.delete()
-            skipped.incrementAndGet()
-            return null
+        try {
+            // Replace in one filesystem operation: a failed rename leaves the
+            // previous good file untouched instead of only a .part file.
+            Files.move(
+                part.toPath(),
+                target.toPath(),
+                StandardCopyOption.REPLACE_EXISTING,
+                StandardCopyOption.ATOMIC_MOVE,
+            )
+        } catch (_: Exception) {
+            try {
+                Files.move(
+                    part.toPath(),
+                    target.toPath(),
+                    StandardCopyOption.REPLACE_EXISTING,
+                )
+            } catch (e: Exception) {
+                part.delete()
+                skipped.incrementAndGet()
+                return null
+            }
         }
         copied.incrementAndGet()
         return target.absolutePath

@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 
+import 'android_folder.dart';
 import 'exporter.dart';
 import 'models.dart';
 import 'store.dart';
@@ -716,15 +717,25 @@ class MediaTab extends StatelessWidget {
   /// Copy found media into a folder with readable names. Originals are never moved,
   /// and the copying itself runs in an isolate.
   Future<void> copyWithReadableNames(BuildContext context) async {
-    final dest = await pickFolder(
-      store,
-      navigator: Navigator.of(context, rootNavigator: true),
-    );
-    if (dest == null || !context.mounted) return;
+    final android = Platform.isAndroid;
+    String? treeUri;
+    String baseDir = '';
+    if (android) {
+      // SAF destinations are not visible to dart:io; let the native bridge do
+      // the writing instead of copying into app-private import storage.
+      treeUri = await AndroidMediaExport.pickFolder();
+      if (treeUri == null || !context.mounted) return;
+      baseDir = 'the chosen folder';
+    } else {
+      final dest = await pickFolder(
+        store,
+        navigator: Navigator.of(context, rootNavigator: true),
+      );
+      if (dest == null || !context.mounted) return;
+      final sep = Platform.pathSeparator;
+      baseDir = dest.endsWith(sep) ? dest.substring(0, dest.length - 1) : dest;
+    }
     final sep = Platform.pathSeparator;
-    final baseDir = dest.endsWith(sep)
-        ? dest.substring(0, dest.length - 1)
-        : dest;
     final jobs = <List<String>>[];
     final used = <String>{};
     for (final c in store.chats.values) {
@@ -737,14 +748,14 @@ class MediaTab extends StatelessWidget {
           var name = base;
           var n = 1;
           while (used.contains(name) ||
-              File('$baseDir$sep$name').existsSync()) {
+              (!android && File('$baseDir$sep$name').existsSync())) {
             final dot = base.lastIndexOf('.');
             final stem = dot > 0 ? base.substring(0, dot) : base;
             final ext = dot > 0 ? base.substring(dot) : '';
             name = '${stem}_${n++}$ext';
           }
           used.add(name);
-          jobs.add([path, '$baseDir$sep$name']);
+          jobs.add(android ? [path, name] : [path, '$baseDir$sep$name']);
         }
       }
     }
@@ -758,9 +769,19 @@ class MediaTab extends StatelessWidget {
       }
       return;
     }
+    Future<int> copy() async {
+      if (android) {
+        final result = await AndroidMediaExport.copyFiles(treeUri!, jobs);
+        final error = result['error'];
+        if (error != null) throw StateError('$error');
+        return result['copied'] as int? ?? 0;
+      }
+      return compute(_copyMediaFiles, jobs);
+    }
+
     await showDialog<void>(
       context: context,
-      builder: (_) => _CopyMediaDialog(dest: baseDir, jobs: jobs),
+      builder: (_) => _CopyMediaDialog(dest: baseDir, jobs: jobs, copy: copy),
     );
   }
 
@@ -983,7 +1004,12 @@ class _DuplicateDialogState extends State<_DuplicateDialog> {
 class _CopyMediaDialog extends StatefulWidget {
   final String dest;
   final List<List<String>> jobs;
-  const _CopyMediaDialog({required this.dest, required this.jobs});
+  final Future<int> Function() copy;
+  const _CopyMediaDialog({
+    required this.dest,
+    required this.jobs,
+    required this.copy,
+  });
 
   @override
   State<_CopyMediaDialog> createState() => _CopyMediaDialogState();
@@ -996,7 +1022,8 @@ class _CopyMediaDialogState extends State<_CopyMediaDialog> {
   @override
   void initState() {
     super.initState();
-    compute(_copyMediaFiles, widget.jobs)
+    widget
+        .copy()
         .then((n) {
           if (mounted) setState(() => _copied = n);
         })

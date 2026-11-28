@@ -134,4 +134,71 @@ void main() {
     settings.clearParseCache();
     expect(stale.existsSync(), isFalse);
   });
+
+  test(
+    'quickFileFingerprint detects same-length edits anywhere in the file',
+    () async {
+      final dir = await Directory.systemTemp.createTemp(
+        'indexed_fingerprint_test_',
+      );
+      addTearDown(() {
+        if (dir.existsSync()) dir.deleteSync(recursive: true);
+      });
+      final source = File('${dir.path}/export.json');
+      source.writeAsStringSync("${'a' * 20000}B${'c' * 20000}");
+      final before = quickFileFingerprint(source.path);
+
+      source.writeAsStringSync("${'a' * 20000}C${'c' * 20000}");
+      final after = quickFileFingerprint(source.path);
+      expect(after, isNot(before));
+    },
+  );
+
+  test(
+    'cache invalidates on a same-length middle edit with unchanged mtime',
+    () async {
+      final dir = await Directory.systemTemp.createTemp('indexed_cache_test_');
+      addTearDown(() {
+        if (dir.existsSync()) dir.deleteSync(recursive: true);
+      });
+      final source = File('${dir.path}/export.json');
+      final cache = '${dir.path}/cache';
+      final pad = 'x' * 30000;
+      source.writeAsStringSync(
+        jsonEncode(<String, dynamic>{
+          'threadId': 'c',
+          'threadName': 'C',
+          'padding': pad,
+          'messages': [
+            <String, dynamic>{
+              'sender_name': 'Ana',
+              'timestamp_ms': 1000,
+              'content': 'aaaaaaaa',
+            },
+          ],
+        }),
+      );
+      final mtime = source.statSync().modified;
+
+      expect(
+        parseFileCached(
+          source.path,
+          cacheDir: cache,
+        ).single.messages.single.text,
+        'aaaaaaaa',
+      );
+      source.writeAsStringSync(
+        source.readAsStringSync().replaceFirst('aaaaaaaa', 'bbbbbbbb'),
+      );
+      await source.setLastModified(mtime);
+
+      expect(
+        parseFileCached(
+          source.path,
+          cacheDir: cache,
+        ).single.messages.single.text,
+        'bbbbbbbb',
+      );
+    },
+  );
 }

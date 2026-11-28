@@ -295,11 +295,15 @@ class ChatView extends StatefulWidget {
 
   /// When opened from global search, scroll to this message once after layout.
   final Msg? initialTarget;
+
+  /// Incremented for every explicit jump, even when the target is unchanged.
+  final int jumpNonce;
   const ChatView({
     super.key,
     required this.store,
     required this.chat,
     this.initialTarget,
+    this.jumpNonce = 0,
   });
 
   @override
@@ -336,6 +340,7 @@ class _ChatViewState extends State<ChatView> {
   List<Pic>? _pics;
   int _picsFor = -1;
   int _msgCount = -1;
+  late int _dataRevision;
   int _listGen = 0;
   String _viewSig = '';
   int? _lastSavedPosT; // avoid repeated settings writes while scrolling
@@ -416,6 +421,7 @@ class _ChatViewState extends State<ChatView> {
     _lastSavedPosT = settings.chatPos[widget.chat.key];
     recompute();
     _msgCount = widget.chat.messages.length;
+    _dataRevision = widget.store.dataRevision;
     if (widget.initialTarget != null) _pendingJump = _findTargetIndex();
   }
 
@@ -442,9 +448,11 @@ class _ChatViewState extends State<ChatView> {
   @override
   void didUpdateWidget(covariant ChatView oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (_msgCount != widget.chat.messages.length) {
+    if (_msgCount != widget.chat.messages.length ||
+        _dataRevision != widget.store.dataRevision) {
       _msgCount = widget.chat.messages.length;
-      recompute(); // more JSON files were added to this chat
+      _dataRevision = widget.store.dataRevision;
+      recompute(); // messages were added or replaced in this chat
     }
     if (_settingsRevision != settings.revision) {
       _settingsRevision = settings.revision;
@@ -456,8 +464,9 @@ class _ChatViewState extends State<ChatView> {
       }
       _pics = null; // captions use display names, even without a query
     }
-    if (oldWidget.initialTarget != widget.initialTarget) {
-      // Hits can share a timestamp, so schedule the new jump explicitly.
+    if (oldWidget.initialTarget != widget.initialTarget ||
+        oldWidget.jumpNonce != widget.jumpNonce) {
+      // The same message can be opened twice from search after scrolling away.
       _pendingJump = _findTargetIndex();
       _jumpScheduled = false;
     }
@@ -576,7 +585,7 @@ class _ChatViewState extends State<ChatView> {
     }
     final inPlace = !panelMode && q.isNotEmpty;
     final sig =
-        '$sender|$mediaOnly|${sort.index}|$useRegex|$caseSensitive|${inPlace ? q : ''}|${widget.chat.messages.length}|$_aliasSignature';
+        '$sender|$mediaOnly|${sort.index}|$useRegex|$caseSensitive|${inPlace ? q : ''}|${widget.chat.messages.length}|${widget.store.dataRevision}|$_aliasSignature';
     if (sig != _viewSig) {
       // The list itself changed: rebuild it from scratch at its start position.
       _viewSig = sig;
@@ -714,8 +723,9 @@ class _ChatViewState extends State<ChatView> {
     // Middle of the visible range: the date the reader is actually looking at.
     final mid = view[(top + (bottom ?? top)) ~/ 2].t;
     if (_centerTime.value != mid) _centerTime.value = mid;
-    // _scrollTop is the oldest index; the visual top may be the newest message.
-    final visualTop = (_reversed || sort == SortMode.newest) ? bottom : top;
+    // _scrollTop is the oldest index. Only a reversed oldest-first list puts
+    // the newest message at the visual top; newest-first already starts there.
+    final visualTop = _reversed ? bottom : top;
     final t = view[visualTop ?? top].t;
     if (t == null) return;
     // Follow ordinary scrolling, but do not fight rail scrubbing.
@@ -726,8 +736,9 @@ class _ChatViewState extends State<ChatView> {
         _railBucket.value = bucket;
       }
     }
-    // Only date-sorted views have a chronological position to restore.
-    if (!dateSort) return;
+    // Only date-sorted, unfiltered views have a chronological position to
+    // restore; a search result must not overwrite "where I left off".
+    if (!dateSort || hasActiveFilters) return;
     if (_lastSavedPosT == t || settings.chatPos[widget.chat.key] == t) {
       _lastSavedPosT = t;
       return;
@@ -2916,7 +2927,7 @@ class _ChatViewState extends State<ChatView> {
 
     return LayoutBuilder(
       builder: (context, box) {
-        _wide = box.maxWidth >= 900;
+        _wide = box.maxWidth >= kWideLayoutBreakpoint;
         final panelVisible = panelMode && query.isNotEmpty;
         final panelSide = panelVisible && _wide;
         final panelFull = panelVisible && !_wide && resultsOpen;

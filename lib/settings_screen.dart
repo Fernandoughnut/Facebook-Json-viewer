@@ -358,7 +358,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
     );
     if (saved == true) {
-      if (pin.text.trim().length < 4) {
+      if (!AppSettings.validPin(pin.text.trim())) {
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Use at least 4 digits.')),
@@ -370,8 +370,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
             context,
           ).showSnackBar(const SnackBar(content: Text('PINs do not match.')));
         }
-      } else {
-        settings.setPin(pin.text.trim());
+      } else if (!settings.setPin(pin.text.trim())) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Use at least 4 digits.')),
+          );
+        }
       }
     }
     pin.dispose();

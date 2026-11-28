@@ -50,10 +50,16 @@ Map<String, dynamic> messageToJson(Msg m, AppSettings s, ExportOptions o) {
   if (o.useDisplayNames && s.aliasFor(m.sender) != m.sender) {
     out['senderOriginal'] = m.sender;
   }
-  if (m.share.isNotEmpty) out['share'] = m.share;
+  if (m.share.isNotEmpty) out['share'] = {'link': m.share};
   if (o.includeReactions && m.reactions.isNotEmpty) {
     out['reactions'] = [
-      for (final r in m.reactions) {'emoji': r.emoji, 'actor': name(r.actor)},
+      for (final r in m.reactions)
+        <String, dynamic>{
+          'emoji': r.emoji,
+          'actor': name(r.actor),
+          if (o.useDisplayNames && s.aliasFor(r.actor) != r.actor)
+            'actorOriginal': r.actor,
+        },
     ];
   }
   if (o.includeMedia && m.media.isNotEmpty) {
@@ -66,6 +72,10 @@ Map<String, dynamic> messageToJson(Msg m, AppSettings s, ExportOptions o) {
     out['reply'] = <String, dynamic>{
       if (r.id.isNotEmpty) 'id': r.id,
       if (r.sender.isNotEmpty) 'sender': name(r.sender),
+      if (r.sender.isNotEmpty &&
+          o.useDisplayNames &&
+          s.aliasFor(r.sender) != r.sender)
+        'senderOriginal': r.sender,
       if (r.text.isNotEmpty) 'text': r.text,
       if (r.t != null) 'timestampMs': r.t,
     };
@@ -92,6 +102,9 @@ Map<String, dynamic> chatToJson(
     'title': title ?? chat.title,
     'key': chat.key,
     'participants': participants,
+    if (options.useDisplayNames &&
+        chat.participants.any((p) => settings.aliasFor(p) != p))
+      'participantsOriginal': (chat.participants.toList()..sort()),
     'messageCount': list.length,
     'messages': [for (final m in list) messageToJson(m, settings, options)],
   };

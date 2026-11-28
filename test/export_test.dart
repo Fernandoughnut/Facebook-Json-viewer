@@ -71,6 +71,53 @@ void main() {
     expect(csv, contains('"hello, ""world""\nsecond line"'));
   });
 
+  test('share and display-name aliases round-trip through our own parser', () {
+    final settings = AppSettings()
+      ..aliases['Ana'] = 'A'
+      ..aliases['Ben'] = 'B';
+    final msg = Msg(
+      id: 'm1',
+      sender: 'Ana',
+      t: 1700000000000,
+      text: 'hello',
+      media: const [],
+      reactions: const [Reaction('👍', 'Ben')],
+      share: 'https://example.invalid/a',
+      type: 'text',
+      unsent: false,
+      reply: const Reply(
+        id: 'm0',
+        sender: 'Ben',
+        text: 'earlier',
+        t: 1699999999000,
+      ),
+      raw: const {},
+    );
+    final chat = Chat('k', 'K')
+      ..participants.addAll(['Ana', 'Ben'])
+      ..messages.add(msg);
+    final json = chatToJson(chat, [msg], settings: settings)
+      ..remove('exportedAt');
+
+    expect(json['participantsOriginal'], ['Ana', 'Ben']);
+    final exported = (json['messages'] as List).single as Map;
+    expect(exported['sender'], 'A');
+    expect(exported['senderOriginal'], 'Ana');
+    expect(exported['share'], {'link': 'https://example.invalid/a'});
+    expect(exported['reactions'].single['actor'], 'B');
+    expect(exported['reactions'].single['actorOriginal'], 'Ben');
+    expect(exported['reply']['sender'], 'B');
+    expect(exported['reply']['senderOriginal'], 'Ben');
+
+    final reparsed = parseExport(json, 'round-trip.json').single;
+    expect(reparsed.participants, ['Ana', 'Ben']);
+    final back = reparsed.messages.single;
+    expect(back.sender, 'Ana');
+    expect(back.share, 'https://example.invalid/a');
+    expect(back.reactions.single.actor, 'Ben');
+    expect(back.reply!.sender, 'Ben');
+  });
+
   test('withRaw keeps original data when explicitly requested', () {
     final settings = AppSettings();
     final chat = _chat();

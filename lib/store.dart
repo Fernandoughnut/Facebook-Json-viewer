@@ -98,6 +98,11 @@ class Store extends ChangeNotifier {
   /// JSON paths that contributed each chat key, so removed files can be forgotten.
   final Map<String, Set<String>> _pathsForChat = {};
 
+  /// Exact message objects contributed by each JSON path. An explicit re-add
+  /// can replace stale source data without discarding overlapping copies from
+  /// other files. Identity matters: two files may hold identical messages.
+  final Map<String, Map<String, Set<Msg>>> _sourceKeys = {};
+
   /// Original message -> the messages that reply to it (for "Show replies").
   final Map<Msg, List<Msg>> _replyIndex = {};
 
@@ -325,6 +330,10 @@ class Store extends ChangeNotifier {
     for (final m in c.messages) {
       if (m.reply != null) withReply.add(m);
     }
+    for (final m in c.messages) {
+      _replyIndex.remove(m);
+      m.replyTarget = null;
+    }
     if (withReply.isEmpty) return 0;
     final byId = <String, Msg>{};
     final byKey = <String, Msg>{};
@@ -434,9 +443,30 @@ class Store extends ChangeNotifier {
       ? 'id:${m.id}'
       : 'msg:${m.t}|${m.sender}|${m.text}|${m.media.map((x) => x.uri).join(',')}';
 
-  /// Compact dedupe identity; full text would retain a second copy of each message.
-  static int _dedupeHash(String chatKey, Msg m) =>
-      Object.hash(chatKey, dedupeKey(m));
+  /// Exact identity: a 29-bit Object.hash would silently drop messages when
+  /// distinct keys collide in a large export.
+  static String _dedupeKey(String chatKey, Msg m) =>
+      '$chatKey\u0000${dedupeKey(m)}';
+
+  /// Forget only the messages that came from [path]. Other overlapping exports
+  /// keep their copies, so an edited file can replace its own stale messages.
+  bool _forgetPathContributions(String path) {
+    final byChat = _sourceKeys.remove(path);
+    if (byChat == null || byChat.isEmpty) return false;
+    var changed = false;
+    for (final entry in byChat.entries) {
+      final c = chats[entry.key];
+      if (c != null) {
+        final before = c.messages.length;
+        c.messages.removeWhere(entry.value.contains);
+        changed |= c.messages.length != before;
+      }
+      final owners = _pathsForChat[entry.key];
+      owners?.remove(path);
+      if (owners != null && owners.isEmpty) _pathsForChat.remove(entry.key);
+    }
+    return changed;
+  }
 
   /// Android cache picks are wiped between runs, so remembered files get durable copies.
   Future<String> _persistJsonPath(String path) async {
@@ -454,14 +484,15 @@ class Store extends ChangeNotifier {
     final name = clean.isEmpty ? 'import.json' : clean;
     var target = File('${dir.path}${Platform.pathSeparator}$name');
     if (await target.exists()) {
-      // Reuse unchanged files on restore, but compare more than size.
-      final srcStat = await src.stat();
-      final targetStat = await target.stat();
-      if (targetStat.size == srcStat.size &&
-          targetStat.modified.microsecondsSinceEpoch ==
-              srcStat.modified.microsecondsSinceEpoch) {
-        return target.path;
+      // Reuse unchanged files on restore, but compare more than size/mtime.
+      var unchanged = false;
+      try {
+        unchanged =
+            quickFileFingerprint(src.path) == quickFileFingerprint(target.path);
+      } catch (_) {
+        // A missing or unreadable copy is replaced below.
       }
+      if (unchanged) return target.path;
       target = File(
         '${dir.path}${Platform.pathSeparator}'
         '${DateTime.now().microsecondsSinceEpoch}-$name',
@@ -484,13 +515,14 @@ class Store extends ChangeNotifier {
     var duplicates = 0;
     var skippedRemoved = 0;
     var prunedRememberedPath = false;
+    var replaced = false;
     final problems = <String>[];
-    final seen = <int>{};
+    final seen = <String>{};
     final touched = <String>{};
     if (settings.dedupeImports) {
       for (final c in chats.values) {
         for (final m in c.messages) {
-          seen.add(_dedupeHash(c.key, m));
+          seen.add(_dedupeKey(c.key, m));
         }
       }
     }
@@ -502,6 +534,10 @@ class Store extends ChangeNotifier {
         final name = path.split(pathSep).last;
         // Explicit re-adds bypass the session guard; per-thread checks still apply.
         if (!reviveRemoved && _loadedPaths.contains(path)) continue;
+        final isReadd = reviveRemoved && _loadedPaths.contains(path);
+        final replacedKeys = isReadd
+            ? (_sourceKeys[path]?.keys.toList() ?? <String>[])
+            : <String>[];
         status = 'Reading $name…';
         notifyListeners();
         try {
@@ -516,7 +552,22 @@ class Store extends ChangeNotifier {
             problems.add('$name: no messages found');
             continue;
           }
+          if (isReadd && _forgetPathContributions(path)) {
+            replaced = true;
+            touched.addAll(replacedKeys);
+            // The old copies are gone, so exact dedupe must be rebuilt too.
+            seen.clear();
+            for (final c in chats.values) {
+              for (final m in c.messages) {
+                seen.add(_dedupeKey(c.key, m));
+              }
+            }
+          }
           final activeKeys = <String>{};
+          final pathKeys = _sourceKeys.putIfAbsent(
+            path,
+            () => <String, Set<Msg>>{},
+          );
           for (final t in threads) {
             final wasRemoved = settings.removedChats.contains(t.key);
             if (wasRemoved && !reviveRemoved) {
@@ -527,6 +578,7 @@ class Store extends ChangeNotifier {
             // A loaded thread stays remembered but is not merged twice.
             activeKeys.add(t.key);
             if (!wasRemoved &&
+                !isReadd &&
                 (_pathsForChat[t.key]?.contains(path) ?? false)) {
               continue;
             }
@@ -534,14 +586,15 @@ class Store extends ChangeNotifier {
             if (!owners.contains(path)) owners.add(path);
             final c = chats.putIfAbsent(t.key, () => Chat(t.key, t.title));
             c.participants.addAll(t.participants);
+            final msgsForChat = pathKeys.putIfAbsent(t.key, () => <Msg>{});
             for (final m in t.messages) {
               c.participants.add(m.sender);
-              final k = _dedupeHash(c.key, m);
-              if (settings.dedupeImports && !seen.add(k)) {
+              if (settings.dedupeImports && !seen.add(_dedupeKey(c.key, m))) {
                 duplicates++;
                 continue;
               }
               c.messages.add(m);
+              msgsForChat.add(m);
               touched.add(t.key);
               added++;
             }
@@ -556,6 +609,7 @@ class Store extends ChangeNotifier {
             // Restore also skips files whose only chats were removed.
             prunedRememberedPath |= settings.jsonPaths.remove(path);
             _loadedPaths.remove(path);
+            _sourceKeys.remove(path);
           }
         } catch (e) {
           problems.add('$name: $e');
@@ -564,9 +618,10 @@ class Store extends ChangeNotifier {
     } finally {
       _busy--;
     }
-    // Only newly loaded chats can be unsorted; duplicated re-picks must not invalidate caches.
+    // Only loaded or replaced messages can change order; duplicated re-picks
+    // must not invalidate caches.
     var replies = 0;
-    if (added > 0) {
+    if (added > 0 || replaced) {
       for (final key in touched) {
         chats[key]?.messages.sort((a, b) => (a.t ?? 0).compareTo(b.t ?? 0));
       }
@@ -689,6 +744,10 @@ class Store extends ChangeNotifier {
       bookmarkRevision++;
     }
     settings.chatDirs.remove(c.key);
+    for (final byChat in _sourceKeys.values) {
+      byChat.remove(c.key);
+    }
+    _sourceKeys.removeWhere((_, byChat) => byChat.isEmpty);
     final prefix = '${c.key}|';
     settings.notes.removeWhere((key, _) => key.startsWith(prefix));
     if (settings.lastChat == c.key) settings.lastChat = '';
@@ -742,6 +801,7 @@ class Store extends ChangeNotifier {
     settings.chatPos = {};
     settings.lastChat = '';
     _bookmarkSets = null;
+    _sourceKeys.clear();
     settings.save();
   }
 
@@ -752,6 +812,7 @@ class Store extends ChangeNotifier {
     _bookmarkSets = null;
     _pathsForChat.clear();
     _loadedPaths.clear();
+    _sourceKeys.clear();
     sharedDirs.clear();
     mediaVersion++;
     dataRevision++;

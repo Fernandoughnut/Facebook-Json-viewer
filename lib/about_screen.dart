@@ -10,6 +10,7 @@ const int appBuild = 5;
 const String appRepoUrl = 'https://github.com/Fernandoughnut/Indexed';
 const String appReleasesUrl = '$appRepoUrl/releases';
 const String appChangelogUrl = '$appRepoUrl/blob/main/CHANGELOG.md';
+const String appFooter = '- Polarbreed';
 
 String get appVersionLabel => '$appVersion+$appBuild';
 
@@ -79,7 +80,7 @@ class AboutScreen extends StatelessWidget {
               ),
               const SizedBox(height: 8),
               Text(
-                '- Polarbreed',
+                appFooter,
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: cs.onSurfaceVariant,
                 ),

@@ -14,6 +14,9 @@ import 'store.dart';
 
 String two(int n) => n.toString().padLeft(2, '0');
 
+/// One split-view breakpoint for the home screen and chat results panel.
+const double kWideLayoutBreakpoint = 800;
+
 /// Group digits for counters such as "20,000+ matches".
 String formatCount(int n) {
   final s = n.toString();
@@ -300,12 +303,14 @@ Future<String?> pickFolder(Store store, {NavigatorState? navigator}) async {
     final progress = ValueNotifier<Map<String, dynamic>>(
       const <String, dynamic>{},
     );
+    final importId = ValueNotifier<String?>(null);
     DialogRoute<void>? dialog;
     if (navigator != null && navigator.mounted) {
       dialog = DialogRoute<void>(
         context: navigator.context,
         barrierDismissible: false,
-        builder: (_) => _FolderImportDialog(progress: progress),
+        builder: (_) =>
+            _FolderImportDialog(progress: progress, importId: importId),
       );
       unawaited(navigator.push(dialog));
     }
@@ -324,6 +329,7 @@ Future<String?> pickFolder(Store store, {NavigatorState? navigator}) async {
         uri,
         dir.path,
         onProgress: (p) => progress.value = p,
+        onStarted: (id) => importId.value = id,
       );
       final error = result['error'];
       if (error != null) {
@@ -362,6 +368,7 @@ Future<String?> pickFolder(Store store, {NavigatorState? navigator}) async {
         navigator.removeRoute(dialog);
       }
       progress.dispose();
+      importId.dispose();
     }
   }
 
@@ -384,7 +391,8 @@ Future<String?> pickFolder(Store store, {NavigatorState? navigator}) async {
 
 class _FolderImportDialog extends StatelessWidget {
   final ValueNotifier<Map<String, dynamic>> progress;
-  const _FolderImportDialog({required this.progress});
+  final ValueNotifier<String?> importId;
+  const _FolderImportDialog({required this.progress, required this.importId});
 
   @override
   Widget build(BuildContext context) {
@@ -434,7 +442,12 @@ class _FolderImportDialog extends StatelessWidget {
         ),
         actions: [
           TextButton(
-            onPressed: () => unawaited(AndroidFolderPicker.cancelImport()),
+            onPressed: () {
+              final id = importId.value;
+              if (id != null) {
+                unawaited(AndroidFolderPicker.cancelImport(id));
+              }
+            },
             child: const Text('Cancel'),
           ),
         ],

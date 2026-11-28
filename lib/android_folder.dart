@@ -54,7 +54,14 @@ class AndroidFolderPicker {
     String uri,
     String destDir, {
     void Function(Map<String, dynamic>)? onProgress,
-  }) => _copyTree('importFolder', uri, destDir, onProgress: onProgress);
+    void Function(String)? onStarted,
+  }) => _copyTree(
+    'importFolder',
+    uri,
+    destDir,
+    onProgress: onProgress,
+    onStarted: onStarted,
+  );
 
   /// Copy JSON files into [destDir] and return their paths.
   static Future<Map<String, dynamic>> importJson(
@@ -76,10 +83,12 @@ class AndroidFolderPicker {
     String uri,
     String destDir, {
     void Function(Map<String, dynamic>)? onProgress,
+    void Function(String)? onStarted,
   }) async {
     final importId = DateTime.now().microsecondsSinceEpoch.toString();
     _ensureListener();
     if (onProgress != null) _progress.register(importId, onProgress);
+    onStarted?.call(importId);
     try {
       final result = await _channel.invokeMapMethod<String, dynamic>(method, {
         'uri': uri,
@@ -110,10 +119,11 @@ class AndroidFolderPicker {
     }
   }
 
-  /// Ask the native importer to stop after the current file.
-  static Future<void> cancelImport() async {
+  /// Ask one native importer to stop after the current file. [importId] keeps
+  /// a late Cancel from stopping a different import.
+  static Future<void> cancelImport(String importId) async {
     try {
-      await _channel.invokeMethod<void>('cancelImport');
+      await _channel.invokeMethod<void>('cancelImport', {'importId': importId});
     } catch (_) {
       // Already cancelled or not on Android.
     }
@@ -193,6 +203,30 @@ class AndroidMediaExport {
       return <String, dynamic>{'error': e.toString()};
     } finally {
       _listeners.remove(exportId);
+    }
+  }
+
+  /// Copy chosen local files into a writable SAF tree under new names.
+  /// Each job is [sourcePath, destinationName].
+  static Future<Map<String, dynamic>> copyFiles(
+    String folderUri,
+    List<List<String>> jobs,
+  ) async {
+    _ensureListener();
+    try {
+      final result = await _channel.invokeMapMethod<String, dynamic>(
+        'copyFilesToFolder',
+        {'uri': folderUri, 'jobs': jobs},
+      );
+      return result ?? <String, dynamic>{};
+    } on PlatformException catch (e) {
+      return <String, dynamic>{'error': e.message ?? e.code};
+    } on MissingPluginException catch (e) {
+      return <String, dynamic>{
+        'error': e.message ?? 'Media export is unavailable',
+      };
+    } catch (e) {
+      return <String, dynamic>{'error': e.toString()};
     }
   }
 }

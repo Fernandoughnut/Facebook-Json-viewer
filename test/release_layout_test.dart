@@ -18,7 +18,22 @@ void main() {
       workflow,
       contains(r'tar -czf "$ARCHIVE" -C build/linux/x64/release/bundle .'),
     );
+    expect(
+      script,
+      contains(
+        r'(cd "$(dirname "$ARCHIVE")" && sha256sum "$BASE" > "$BASE.sha256")',
+      ),
+    );
   });
+
+  test(
+    'pull-request CI builds both desktop and sideload release artifacts',
+    () {
+      final ci = File('.github/workflows/flutter.yml').readAsStringSync();
+      expect(ci, contains('flutter build linux --release'));
+      expect(ci, contains('./tool/build_android.sh'));
+    },
+  );
 
   test('Android APK checksums use bare downloaded file names', () {
     final script = File('tool/build_android.sh').readAsStringSync();

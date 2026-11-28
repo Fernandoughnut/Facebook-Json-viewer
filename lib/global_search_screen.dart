@@ -33,17 +33,21 @@ class _GlobalSearchScreenState extends State<GlobalSearchScreen> {
     _dataRevision = widget.store.dataRevision;
     _settingsRevision = widget.store.settings.revision;
     widget.store.addListener(_onStoreChanged);
+    widget.store.settings.addListener(_onSettingsChanged);
     _search();
   }
 
   @override
   void dispose() {
     widget.store.removeListener(_onStoreChanged);
+    widget.store.settings.removeListener(_onSettingsChanged);
     _timer?.cancel();
     qc.dispose();
     _resultsController.dispose();
     super.dispose();
   }
+
+  void _onSettingsChanged() => _onStoreChanged();
 
   void _onStoreChanged() {
     final data = widget.store.dataRevision;

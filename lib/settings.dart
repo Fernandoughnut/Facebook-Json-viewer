@@ -167,6 +167,11 @@ class AppSettings extends ChangeNotifier {
   Future<void> _lastWrite = Future.value();
   bool _writeAfterLoad = false;
 
+  /// A saved state that could not be read must be archived before any new
+  /// state is written over it; otherwise a background kill loses the session.
+  bool _loadFailed = false;
+  bool get hadLoadFailure => _loadFailed;
+
   String get dir {
     final override = _configDir;
     if (override != null) return override;
@@ -532,6 +537,55 @@ class AppSettings extends ChangeNotifier {
     lastChat = '${j['lastChat'] ?? ''}';
   }
 
+  /// Apply a fully decoded snapshot only after every field validated.
+  void _adoptLoaded(AppSettings loaded) {
+    themeMode = loaded.themeMode;
+    accent = loaded.accent;
+    material3 = loaded.material3;
+    amoled = loaded.amoled;
+    animateTheme = loaded.animateTheme;
+    textScale = loaded.textScale;
+    startAt = loaded.startAt;
+    layout = loaded.layout;
+    showReplies = loaded.showReplies;
+    use24h = loaded.use24h;
+    showTimes = loaded.showTimes;
+    chatImageWidth = loaded.chatImageWidth;
+    galleryTileSize = loaded.galleryTileSize;
+    resultsLayout = loaded.resultsLayout;
+    resultsNewestFirst = loaded.resultsNewestFirst;
+    presets = loaded.presets;
+    showActivityRail = loaded.showActivityRail;
+    activityRailDefaultApplied = loaded.activityRailDefaultApplied;
+    showPeopleFilters = loaded.showPeopleFilters;
+    showDatePill = loaded.showDatePill;
+    autoHideTopBar = loaded.autoHideTopBar;
+    showIndexScrollbar = loaded.showIndexScrollbar;
+    immersiveMode = loaded.immersiveMode;
+    groupTimesByMinute = loaded.groupTimesByMinute;
+    useParseCache = loaded.useParseCache;
+    keepRaw = loaded.keepRaw;
+    dedupeImports = loaded.dedupeImports;
+    mediaPackNaming = loaded.mediaPackNaming;
+    lockEnabled = loaded.lockEnabled;
+    lockHash = loaded.lockHash;
+    lockSalt = loaded.lockSalt;
+    reopenLast = loaded.reopenLast;
+    jsonPaths = loaded.jsonPaths;
+    sharedDirs = loaded.sharedDirs;
+    chatDirs = loaded.chatDirs;
+    chatPos = loaded.chatPos;
+    aliases = loaded.aliases;
+    _lowerAliases.clear();
+    bookmarks = loaded.bookmarks;
+    notes = loaded.notes;
+    archivedChats = loaded.archivedChats;
+    removedChats = loaded.removedChats;
+    me = loaded.me;
+    lastChat = loaded.lastChat;
+    _writeAfterLoad = loaded._writeAfterLoad;
+  }
+
   Future<void> load() async {
     if (_configDir == null && Platform.isAndroid) {
       try {
@@ -551,6 +605,8 @@ class AppSettings extends ChangeNotifier {
       text = await f.readAsString();
     } catch (e) {
       // A temporary read failure must not hide the user's saved session.
+      // Archive the original before the first later save replaces it.
+      _loadFailed = true;
       logError('Could not read state.json; keeping it: $e');
       return;
     }
@@ -559,24 +615,33 @@ class AppSettings extends ChangeNotifier {
     try {
       j = jsonDecode(text);
     } catch (e) {
-      _preserveBadState(e);
+      if (!_preserveBadState(e)) _loadFailed = true;
       return;
     }
-    if (j is Map) {
-      try {
-        _fromJson(j);
-      } catch (e) {
-        _preserveBadState(e);
-        return;
+    if (j is! Map) {
+      // Valid JSON with the wrong root would otherwise be silently overwritten.
+      if (!_preserveBadState('state.json root is not an object')) {
+        _loadFailed = true;
       }
+      return;
     }
+    final loaded = AppSettings(configDir: _configDir, dataDir: _dataDir);
+    try {
+      loaded._fromJson(j);
+    } catch (e) {
+      if (!_preserveBadState(e)) _loadFailed = true;
+      return;
+    }
+    _adoptLoaded(loaded);
     if (_writeAfterLoad) {
       _writeAfterLoad = false;
       await flush();
     }
   }
 
-  void _preserveBadState(Object error) {
+  /// Returns false only when an existing file could not be archived. Callers
+  /// then suppress writes so the user's state is never replaced.
+  bool _preserveBadState(Object error) {
     final f = File(filePath);
     try {
       if (f.existsSync()) {
@@ -586,8 +651,10 @@ class AppSettings extends ChangeNotifier {
         f.renameSync(bad.path);
         logError('Could not read state.json; preserved as ${bad.path}: $error');
       }
-    } catch (_) {
-      logError('Could not read or preserve state.json: $error');
+      return true;
+    } catch (e) {
+      logError('Could not read or preserve state.json: $error ($e)');
+      return false;
     }
   }
 
@@ -616,8 +683,17 @@ class AppSettings extends ChangeNotifier {
 
   Future<void> _writeNow() async {
     try {
-      // Synchronous writes survive Android background kills; a crash can lose the last change.
       final f = File(filePath);
+      if (_loadFailed) {
+        if (f.existsSync() && !_preserveBadState('unreadable at startup')) {
+          logError(
+            'State write skipped; original state.json is still present.',
+          );
+          return;
+        }
+        _loadFailed = false;
+      }
+      // Synchronous writes survive Android background kills; a crash can lose the last change.
       f.parent.createSync(recursive: true);
       // Write via a temp file so a crash cannot leave a half-written state.
       final tmp = File('${f.path}.tmp');
@@ -687,12 +763,17 @@ class AppSettings extends ChangeNotifier {
     return hash == lockHash;
   }
 
-  void setPin(String pin) {
+  static bool validPin(String pin) => RegExp(r'^\d{4,}$').hasMatch(pin);
+
+  /// Returns false without changing anything for an invalid PIN.
+  bool setPin(String pin) {
+    if (!validPin(pin)) return false;
     final salt = DateTime.now().microsecondsSinceEpoch.toString();
     lockSalt = salt;
     lockHash = sha256.convert(utf8.encode('$salt|$pin')).toString();
     lockEnabled = true;
     update(() {});
+    return true;
   }
 
   void disableLock() => update(() {

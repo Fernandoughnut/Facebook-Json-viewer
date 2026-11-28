@@ -104,23 +104,29 @@ class MediaPackPlan {
     this.unreadable = const <String>[],
     this.duplicateReferences = 0,
     this.emptyReferences = 0,
-    this.naming = MediaNamingMode.readableDate,
+    this.naming = MediaNamingMode.originalSorted,
     this.keepDuplicateReferences = false,
   });
 
   MediaPackPlan copyWith({
     List<MediaPackFile>? files,
+    List<MediaPackReference>? references,
     List<String>? missing,
     List<String>? unreadable,
+    int? duplicateReferences,
+    int? emptyReferences,
+    MediaNamingMode? naming,
+    bool? keepDuplicateReferences,
   }) => MediaPackPlan(
     files: files ?? this.files,
-    references: references,
+    references: references ?? this.references,
     missing: missing ?? this.missing,
     unreadable: unreadable ?? this.unreadable,
-    duplicateReferences: duplicateReferences,
-    emptyReferences: emptyReferences,
-    naming: naming,
-    keepDuplicateReferences: keepDuplicateReferences,
+    duplicateReferences: duplicateReferences ?? this.duplicateReferences,
+    emptyReferences: emptyReferences ?? this.emptyReferences,
+    naming: naming ?? this.naming,
+    keepDuplicateReferences:
+        keepDuplicateReferences ?? this.keepDuplicateReferences,
   );
 }
 
@@ -289,13 +295,31 @@ MediaPackPlan pruneUnreadableMediaPack(MediaPackPlan plan) {
 
   final missing = <String>[...plan.missing];
   final missingSet = missing.toSet();
+  final packed = kept.map((f) => f.name).toSet();
+  final keptRefs = <MediaPackReference>[];
   for (final ref in plan.references) {
-    if (unreadableSet.contains(ref.packedAs)) {
+    if (!packed.contains(ref.packedAs)) {
       final name = ref.originalName.isEmpty ? ref.uri : ref.originalName;
       if (name.isNotEmpty && missingSet.add(name)) missing.add(name);
+      continue;
     }
+    keptRefs.add(ref);
   }
-  return plan.copyWith(files: kept, missing: missing, unreadable: unreadable);
+  final seenPacked = <String>{};
+  var duplicates = 0;
+  var empty = 0;
+  for (final ref in keptRefs) {
+    if (!seenPacked.add(ref.packedAs)) duplicates++;
+    if (ref.uri.trim().isEmpty) empty++;
+  }
+  return plan.copyWith(
+    files: kept,
+    references: keptRefs,
+    missing: missing,
+    unreadable: unreadable,
+    duplicateReferences: duplicates,
+    emptyReferences: empty,
+  );
 }
 
 /// A small manifest makes the hashed export names traceable without forcing
