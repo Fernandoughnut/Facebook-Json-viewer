@@ -3,6 +3,8 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 
+import 'package:fb_viewer/models.dart';
+import 'package:fb_viewer/settings.dart';
 import 'package:fb_viewer/util.dart';
 
 void main() {
@@ -165,6 +167,73 @@ void main() {
       if (tracker.update(1000 + i * 100, 1500 + i * 300.0)) afterReset++;
     }
     expect(afterReset, 1);
+  });
+
+  test('results storage key is stable for the same results view', () {
+    String key({
+      String chat = 'chat-1',
+      String query = 'fox',
+      String? sender,
+      bool mediaOnly = false,
+      bool useRegex = false,
+      bool caseSensitive = false,
+      SortMode sort = SortMode.oldest,
+      bool newestFirst = false,
+      ResultsLayout layout = ResultsLayout.detailed,
+      int count = 42,
+    }) => searchResultsStorageKey(
+      chatKey: chat,
+      query: query,
+      sender: sender,
+      mediaOnly: mediaOnly,
+      useRegex: useRegex,
+      caseSensitive: caseSensitive,
+      sort: sort,
+      newestFirst: newestFirst,
+      layout: layout,
+      count: count,
+    );
+
+    final base = key();
+    expect(base, key());
+    expect(base, isNot(key(query: 'dog')));
+    expect(base, isNot(key(sender: 'Ana')));
+    expect(base, isNot(key(mediaOnly: true)));
+    expect(base, isNot(key(useRegex: true)));
+    expect(base, isNot(key(caseSensitive: true)));
+    expect(base, isNot(key(sort: SortMode.newest)));
+    expect(base, isNot(key(newestFirst: true)));
+    expect(base, isNot(key(layout: ResultsLayout.compact)));
+    expect(base, isNot(key(count: 43)));
+    expect(base, isNot(key(chat: 'chat-2')));
+  });
+
+  test('results storage key cannot collide across separator characters', () {
+    final a = searchResultsStorageKey(
+      chatKey: 'a|b',
+      query: 'c',
+      sender: null,
+      mediaOnly: false,
+      useRegex: false,
+      caseSensitive: false,
+      sort: SortMode.oldest,
+      newestFirst: false,
+      layout: ResultsLayout.detailed,
+      count: 1,
+    );
+    final b = searchResultsStorageKey(
+      chatKey: 'a',
+      query: 'b|c',
+      sender: null,
+      mediaOnly: false,
+      useRegex: false,
+      caseSensitive: false,
+      sort: SortMode.oldest,
+      newestFirst: false,
+      layout: ResultsLayout.detailed,
+      count: 1,
+    );
+    expect(a, isNot(b));
   });
 }
 

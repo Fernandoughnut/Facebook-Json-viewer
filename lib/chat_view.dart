@@ -3140,6 +3140,21 @@ class _ChatViewState extends State<ChatView> {
                   crossAxisMargin: 2,
                   thumbColor: cs.onSurface.withValues(alpha: 0.24),
                   child: ListView.separated(
+                    // Keeps the spot when the narrow panel is hidden and reopened.
+                    key: PageStorageKey(
+                      searchResultsStorageKey(
+                        chatKey: widget.chat.key,
+                        query: q,
+                        sender: sender,
+                        mediaOnly: mediaOnly,
+                        useRegex: useRegex,
+                        caseSensitive: caseSensitive,
+                        sort: sort,
+                        newestFirst: newestFirst,
+                        layout: settings.resultsLayout,
+                        count: results.length,
+                      ),
+                    ),
                     controller: _resultsController,
                     padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
                     itemCount: results.length,

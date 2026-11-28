@@ -25,6 +25,35 @@ String formatCount(int n) {
   return out.toString();
 }
 
+/// Stable PageStorage identity for a conversation's search results list.
+/// The same key restores a scrolled position; any change starts at the top.
+String searchResultsStorageKey({
+  required String chatKey,
+  required String query,
+  required String? sender,
+  required bool mediaOnly,
+  required bool useRegex,
+  required bool caseSensitive,
+  required SortMode sort,
+  required bool newestFirst,
+  required ResultsLayout layout,
+  required int count,
+}) {
+  final parts = <String>[
+    chatKey,
+    query,
+    sender ?? '',
+    mediaOnly.toString(),
+    useRegex.toString(),
+    caseSensitive.toString(),
+    sort.name,
+    newestFirst.toString(),
+    layout.name,
+    count.toString(),
+  ];
+  return parts.map((p) => '${p.length}:$p').join('|');
+}
+
 /// Next/previous match position; -1 when none, wrapping at both ends.
 int nextMatchPosition(int? current, List<int> matches, int delta) {
   if (matches.isEmpty) return -1;
