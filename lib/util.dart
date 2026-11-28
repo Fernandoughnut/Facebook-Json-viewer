@@ -208,11 +208,18 @@ bool shouldAutoHideImmersiveControls({
 String displayName(String name) => gSettings?.aliasFor(name) ?? name;
 
 /// One matcher shared by the in-chat search, the results panel and global search.
-bool messageMatches(Msg m, String q, {String? sender, bool mediaOnly = false}) {
+/// Pass [lowerQuery] when scanning many messages so the query is lowered once.
+bool messageMatches(
+  Msg m,
+  String q, {
+  String? sender,
+  bool mediaOnly = false,
+  String? lowerQuery,
+}) {
   if (sender != null && m.sender != sender) return false;
   if (mediaOnly && m.media.isEmpty) return false;
   if (q.isEmpty) return true;
-  final lq = q.toLowerCase();
+  final lq = lowerQuery ?? q.toLowerCase();
   final alias = gSettings?.lowerAliasFor(m.sender) ?? m.lowerSender;
   return m.lower.contains(lq) ||
       m.lowerSender.contains(lq) ||

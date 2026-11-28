@@ -315,6 +315,37 @@ void main() {
     expect(File('${state.path}.tmp').existsSync(), isFalse);
   });
 
+  test('an unreadable state file is kept, not renamed away', () async {
+    final dir = await Directory.systemTemp.createTemp(
+      'indexed_unreadable_state_test_',
+    );
+    addTearDown(() {
+      if (dir.existsSync()) dir.deleteSync(recursive: true);
+    });
+
+    final state = File('${dir.path}/state.json');
+    state.writeAsStringSync(jsonEncode({'me': 'Ana'}));
+    addTearDown(() {
+      if (state.existsSync()) {
+        Process.runSync('chmod', ['600', state.path]);
+      }
+    });
+    expect(Process.runSync('chmod', ['000', state.path]).exitCode, 0);
+
+    final settings = AppSettings(configDir: dir.path);
+    addTearDown(settings.dispose);
+    await settings.load();
+
+    expect(Process.runSync('chmod', ['600', state.path]).exitCode, 0);
+    expect(state.readAsStringSync(), contains('Ana'));
+    expect(
+      dir.listSync().where((e) => e.path.startsWith('${state.path}.bad-')),
+      isEmpty,
+    );
+    expect(settings.me, isEmpty);
+    expect(settings.readLog(), contains('Could not read state.json'));
+  });
+
   test('a saved state is replaced without a temp leftover', () async {
     final dir = await Directory.systemTemp.createTemp(
       'indexed_atomic_state_test_',

@@ -52,6 +52,17 @@ void main() {
     expect(messageMatches(_msg(media: const []), '', mediaOnly: true), isFalse);
   });
 
+  test('messageMatches accepts a pre-lowered query for bulk scans', () {
+    gSettings = AppSettings();
+    final m = _msg(sender: 'SoMeOne', text: 'Needle in a Haystack');
+
+    expect(
+      messageMatches(m, 'NEEDLE', lowerQuery: 'needle'),
+      messageMatches(m, 'NEEDLE'),
+    );
+    expect(messageMatches(m, 'NEEDLE', lowerQuery: 'absent'), isFalse);
+  });
+
   test('messageMatches finds a friend through the cached alias', () {
     final settings = AppSettings();
     settings.aliases['SoMeOne'] = 'Friendly Friend';

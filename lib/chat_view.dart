@@ -535,7 +535,7 @@ class _ChatViewState extends State<ChatView> {
 
   // ---------- what is shown ----------
 
-  bool _hit(Msg m, String q) {
+  bool _hit(Msg m, String q, String lowerQ) {
     if (useRegex) {
       final re = _compiledRegex;
       if (re == null) return false; // invalid or empty regex matches nothing
@@ -552,7 +552,7 @@ class _ChatViewState extends State<ChatView> {
           m.share.contains(q) ||
           m.media.any((x) => x.name.contains(q));
     }
-    return messageMatches(m, q);
+    return messageMatches(m, q, lowerQuery: lowerQ);
   }
 
   /// Regex highlights only the substring matching this message's text.
@@ -565,6 +565,7 @@ class _ChatViewState extends State<ChatView> {
 
   void recompute() {
     final q = query;
+    final lowerQ = q.toLowerCase();
     _compiledRegex = null;
     if (useRegex && q.isNotEmpty) {
       try {
@@ -582,7 +583,7 @@ class _ChatViewState extends State<ChatView> {
       final list = widget.chat.messages.where((m) {
         if (sender != null && m.sender != sender) return false;
         if (mediaOnly && m.media.isEmpty) return false;
-        if (inPlace && !_hit(m, q)) return false;
+        if (inPlace && !_hit(m, q, lowerQ)) return false;
         return true;
       }).toList();
       view = _sorted(list);
@@ -599,7 +600,7 @@ class _ChatViewState extends State<ChatView> {
     results = [];
     if (panelMode && q.isNotEmpty) {
       for (var i = 0; i < view.length; i++) {
-        if (_hit(view[i], q)) results.add(i);
+        if (_hit(view[i], q, lowerQ)) results.add(i);
       }
     }
     _pics = null;

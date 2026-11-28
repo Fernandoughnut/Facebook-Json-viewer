@@ -39,6 +39,33 @@ void main() {
     },
   );
 
+  test('sortedChats is cached until the data revision changes', () async {
+    final dir = await Directory.systemTemp.createTemp('indexed_sort_test_');
+    addTearDown(() {
+      if (dir.existsSync()) dir.deleteSync(recursive: true);
+    });
+    final settings = AppSettings(configDir: dir.path);
+    addTearDown(settings.dispose);
+    await settings.load();
+    final store = Store(settings);
+
+    final older = Chat('older', 'Older');
+    older.messages.add(_msg('m1', 'Ana', 1000));
+    final newer = Chat('newer', 'Newer');
+    newer.messages.add(_msg('m2', 'Ben', 2000));
+    store.chats
+      ..[older.key] = older
+      ..[newer.key] = newer;
+
+    final first = store.sortedChats;
+    expect(first.map((c) => c.key), ['newer', 'older']);
+    expect(identical(first, store.sortedChats), isTrue);
+
+    store.dataRevision++;
+    expect(identical(first, store.sortedChats), isFalse);
+    expect(store.sortedChats.map((c) => c.key), ['newer', 'older']);
+  });
+
   test('media stats are cached until the media folders change', () async {
     final dir = await Directory.systemTemp.createTemp('indexed_store_test_');
     addTearDown(() {

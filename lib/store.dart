@@ -110,8 +110,25 @@ class Store extends ChangeNotifier {
   int _busy = 0;
   bool get busy => _busy > 0;
 
-  List<Chat> get sortedChats =>
-      chats.values.toList()..sort((a, b) => b.lastT.compareTo(a.lastT));
+  List<Chat>? _sortedChatsCache;
+  int _sortedChatsRevision = -1;
+  int _sortedChatsCount = -1;
+
+  /// Read-only, cached until messages or chats change. Sidebar rebuilds and
+  /// global search both ask for this on every keystroke.
+  List<Chat> get sortedChats {
+    if (_sortedChatsCache != null &&
+        _sortedChatsRevision == dataRevision &&
+        _sortedChatsCount == chats.length) {
+      return _sortedChatsCache!;
+    }
+    final list = chats.values.toList()
+      ..sort((a, b) => b.lastT.compareTo(a.lastT));
+    _sortedChatsCache = list;
+    _sortedChatsRevision = dataRevision;
+    _sortedChatsCount = chats.length;
+    return list;
+  }
 
   /// Case-insensitive global search over text, sender names, links and filenames.
   /// Empty query returns nothing; it stops just past [limit] to avoid unbounded work.

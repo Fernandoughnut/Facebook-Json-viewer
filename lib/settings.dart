@@ -543,30 +543,51 @@ class AppSettings extends ChangeNotifier {
       }
     }
     _dataDir ??= dir;
+    final f = File(filePath);
+    if (!await f.exists()) return;
+
+    late final String text;
     try {
-      final f = File(filePath);
-      if (await f.exists()) {
-        final j = jsonDecode(await f.readAsString());
-        if (j is Map) _fromJson(j);
-        if (_writeAfterLoad) {
-          _writeAfterLoad = false;
-          await flush();
-        }
-      }
+      text = await f.readAsString();
     } catch (e) {
-      // Keep the damaged file so a bad write can be inspected, then start fresh.
-      final f = File(filePath);
+      // A temporary read failure must not hide the user's saved session.
+      logError('Could not read state.json; keeping it: $e');
+      return;
+    }
+
+    Object? j;
+    try {
+      j = jsonDecode(text);
+    } catch (e) {
+      _preserveBadState(e);
+      return;
+    }
+    if (j is Map) {
       try {
-        if (f.existsSync()) {
-          final bad = File(
-            '${f.path}.bad-${DateTime.now().microsecondsSinceEpoch}',
-          );
-          f.renameSync(bad.path);
-          logError('Could not read state.json; preserved as ${bad.path}: $e');
-        }
-      } catch (_) {
-        logError('Could not read or preserve state.json: $e');
+        _fromJson(j);
+      } catch (e) {
+        _preserveBadState(e);
+        return;
       }
+    }
+    if (_writeAfterLoad) {
+      _writeAfterLoad = false;
+      await flush();
+    }
+  }
+
+  void _preserveBadState(Object error) {
+    final f = File(filePath);
+    try {
+      if (f.existsSync()) {
+        final bad = File(
+          '${f.path}.bad-${DateTime.now().microsecondsSinceEpoch}',
+        );
+        f.renameSync(bad.path);
+        logError('Could not read state.json; preserved as ${bad.path}: $error');
+      }
+    } catch (_) {
+      logError('Could not read or preserve state.json: $error');
     }
   }
 
