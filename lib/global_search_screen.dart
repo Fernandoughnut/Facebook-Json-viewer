@@ -17,7 +17,7 @@ class GlobalSearchScreen extends StatefulWidget {
 
 class _GlobalSearchScreenState extends State<GlobalSearchScreen> {
   final qc = TextEditingController();
-  final ScrollController _resultsController = ScrollController();
+  late final ScrollController _resultsController;
   Timer? _timer;
   String query = '';
   String? sender;
@@ -30,9 +30,17 @@ class _GlobalSearchScreenState extends State<GlobalSearchScreen> {
   @override
   void initState() {
     super.initState();
-    _dataRevision = widget.store.dataRevision;
-    _settingsRevision = widget.store.settings.revision;
-    widget.store.addListener(_onStoreChanged);
+    final view = widget.store;
+    qc.text = view.globalSearchQuery;
+    query = view.globalSearchQuery;
+    sender = view.globalSearchSender;
+    mediaOnly = view.globalSearchMediaOnly;
+    _resultsController = ScrollController(
+      initialScrollOffset: view.globalSearchScrollOffset,
+    )..addListener(_saveResultsOffset);
+    _dataRevision = view.dataRevision;
+    _settingsRevision = view.settings.revision;
+    view.addListener(_onStoreChanged);
     _search();
   }
 
@@ -40,9 +48,22 @@ class _GlobalSearchScreenState extends State<GlobalSearchScreen> {
   void dispose() {
     widget.store.removeListener(_onStoreChanged);
     _timer?.cancel();
+    _saveResultsOffset();
+    _resultsController.removeListener(_saveResultsOffset);
     qc.dispose();
     _resultsController.dispose();
     super.dispose();
+  }
+
+  void _saveResultsOffset() {
+    if (_resultsController.hasClients) {
+      widget.store.globalSearchScrollOffset = _resultsController.offset;
+    }
+  }
+
+  void _resetResultsOffset() {
+    widget.store.globalSearchScrollOffset = 0;
+    if (_resultsController.hasClients) _resultsController.jumpTo(0);
   }
 
   void _onStoreChanged() {
@@ -59,7 +80,10 @@ class _GlobalSearchScreenState extends State<GlobalSearchScreen> {
     _timer = Timer(const Duration(milliseconds: 200), () {
       if (!mounted) return;
       setState(() {
-        query = qc.text.trim();
+        final next = qc.text.trim();
+        if (next != query) _resetResultsOffset();
+        query = next;
+        widget.store.globalSearchQuery = query;
         _search();
       });
     });
@@ -69,6 +93,7 @@ class _GlobalSearchScreenState extends State<GlobalSearchScreen> {
     if (query.isEmpty) {
       hits = const <GlobalHit>[];
       truncated = false;
+      _resetResultsOffset();
       return;
     }
     final result = widget.store.searchAll(
@@ -138,6 +163,8 @@ class _GlobalSearchScreenState extends State<GlobalSearchScreen> {
                     ],
                     onSelected: (v) => setState(() {
                       sender = v;
+                      widget.store.globalSearchSender = sender;
+                      _resetResultsOffset();
                       _search();
                     }),
                   )
@@ -158,6 +185,8 @@ class _GlobalSearchScreenState extends State<GlobalSearchScreen> {
                     ],
                     onChanged: (v) => setState(() {
                       sender = v;
+                      widget.store.globalSearchSender = sender;
+                      _resetResultsOffset();
                       _search();
                     }),
                   ),
@@ -167,6 +196,8 @@ class _GlobalSearchScreenState extends State<GlobalSearchScreen> {
                   selected: mediaOnly,
                   onSelected: (v) => setState(() {
                     mediaOnly = v;
+                    widget.store.globalSearchMediaOnly = mediaOnly;
+                    _resetResultsOffset();
                     _search();
                   }),
                 ),

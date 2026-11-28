@@ -107,6 +107,12 @@ class Store extends ChangeNotifier {
   String me = '';
   String status = 'Open a JSON file to begin.';
 
+  // Last global-search view, kept for this session only.
+  String globalSearchQuery = '';
+  String? globalSearchSender;
+  bool globalSearchMediaOnly = false;
+  double globalSearchScrollOffset = 0;
+
   int _busy = 0;
   bool get busy => _busy > 0;
 
